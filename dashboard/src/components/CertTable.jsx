@@ -142,9 +142,7 @@ function SortHead({ column, sort, onSort }) {
   );
 }
 
-export default function CertTable({ rows, selected, onToggle, onToggleAll }) {
-  const allSelected = rows.length > 0 && selected.size === rows.length;
-  const someSelected = selected.size > 0 && selected.size < rows.length;
+export default function CertTable({ rows }) {
   const { widths, onResizeStart } = useColumnWidths();
   const [sort, setSort] = useState({ id: null, dir: "asc" });
 
@@ -172,7 +170,6 @@ export default function CertTable({ rows, selected, onToggle, onToggleAll }) {
     <div className="overflow-x-auto">
       <Table layout="fixed">
         <colgroup>
-          <col style={{ width: 44 }} />
           <col style={{ width: 40 }} />
           {COLUMNS.map((c) => (
             <col key={c.id} style={{ width: widths[c.id] }} />
@@ -180,12 +177,6 @@ export default function CertTable({ rows, selected, onToggle, onToggleAll }) {
         </colgroup>
         <Table.Header>
           <Table.Row>
-            <Table.CheckHead
-              checked={allSelected}
-              indeterminate={someSelected}
-              onCheckedChange={onToggleAll}
-              aria-label="Select all certificates"
-            />
             <Table.Head />
             {COLUMNS.map((c) => (
               <Table.Head key={c.id}>
@@ -200,15 +191,7 @@ export default function CertTable({ rows, selected, onToggle, onToggleAll }) {
         </Table.Header>
         <Table.Body>
           {sortedRows.map((row) => (
-            <Table.Row
-              key={row.id}
-              variant={selected.has(row.id) ? "selected" : "default"}
-            >
-              <Table.CheckCell
-                checked={selected.has(row.id)}
-                onCheckedChange={() => onToggle(row.id)}
-                aria-label={`Select ${row.name}`}
-              />
+            <Table.Row key={row.id}>
               <Table.Cell>
                 <Tooltip content={row.detail || "No additional detail"}>
                   <span className="inline-flex text-kumo-link">
@@ -261,7 +244,7 @@ export default function CertTable({ rows, selected, onToggle, onToggleAll }) {
           ))}
           {sortedRows.length === 0 && (
             <Table.Row>
-              <Table.Cell colSpan={COLUMNS.length + 2}>
+              <Table.Cell colSpan={COLUMNS.length + 1}>
                 <Empty
                   size="sm"
                   icon={<MagnifyingGlassIcon size={32} />}

@@ -51,7 +51,6 @@ function formatFileSize(bytes) {
 
 export default function App() {
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState(new Set());
   const [certs, setCerts] = useState(mockCerts);
   const [isLive, setIsLive] = useState(false);
   const [statusFilter, setStatusFilter] = useState(() => new Set());
@@ -154,21 +153,6 @@ export default function App() {
   function clearFilters() {
     setStatusFilter(new Set());
     setClusterFilter(new Set());
-  }
-
-  function toggleRow(id) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function toggleAll() {
-    setSelected((prev) =>
-      prev.size === rows.length ? new Set() : new Set(rows.map((r) => r.id)),
-    );
   }
 
   function exportJson() {
@@ -434,20 +418,12 @@ export default function App() {
             </div>
           </LayerCard.Secondary>
 
-          <CertTable
-            rows={rows}
-            selected={selected}
-            onToggle={toggleRow}
-            onToggleAll={toggleAll}
-          />
+          <CertTable rows={rows} />
 
           <LayerCard.Secondary className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
             <Text as="span" variant="secondary" size="sm">
               Showing {rows.length === 0 ? 0 : 1}–{rows.length} of{" "}
               {certs.length}
-            </Text>
-            <Text as="span" variant="secondary" size="sm">
-              {selected.size} selected
             </Text>
           </LayerCard.Secondary>
         </LayerCard>
