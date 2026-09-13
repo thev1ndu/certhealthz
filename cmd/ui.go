@@ -450,7 +450,7 @@ type apiEndpoint struct {
 func apiEndpoints(entries []EndpointEntry) []apiEndpoint {
 	out := make([]apiEndpoint, len(entries))
 	for i, e := range entries {
-		out[i] = apiEndpoint{Endpoint: e.Endpoint, Removable: e.Removable}
+		out[i] = apiEndpoint(e)
 	}
 	return out
 }
