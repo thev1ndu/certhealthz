@@ -151,7 +151,12 @@ func clusterLabels(entries []ClusterEntry) []string {
 }
 
 func handleAddCluster(clusters *ClusterRegistry, w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseMultipartForm(maxKubeconfigUploadSize); err != nil {
+	// Cap the request body itself, not just the in-memory portion
+	// ParseMultipartForm buffers — otherwise a client can still force an
+	// unbounded read (into the temp-file-backed overflow) before that limit
+	// kicks in.
+	r.Body = http.MaxBytesReader(w, r.Body, maxKubeconfigUploadSize)
+	if err := r.ParseMultipartForm(maxKubeconfigUploadSize); err != nil { //nolint:gosec // body is already capped by MaxBytesReader above
 		http.Error(w, "invalid upload", http.StatusBadRequest)
 		return
 	}

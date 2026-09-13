@@ -114,7 +114,9 @@ func TestDashboardAddClusterRejectsBadKubeconfigEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateFormFile: %v", err)
 	}
-	part.Write([]byte("not: a valid kubeconfig"))
+	if _, err := part.Write([]byte("not: a valid kubeconfig")); err != nil {
+		t.Fatalf("writing form file part: %v", err)
+	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("closing multipart writer: %v", err)
 	}
