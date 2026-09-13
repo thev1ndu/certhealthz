@@ -1,5 +1,5 @@
 /certhealthz
 *.test
 *.db
-pkg/dashboardui/dist/*
-!pkg/dashboardui/dist/index.html
+pkg/ui/dist/*
+!pkg/ui/dist/index.html

@@ -7,10 +7,10 @@ build: dashboard-build
 # where go:embed picks it up. Required before a release build; go build alone
 # works too but serves the placeholder page until this has run once.
 dashboard-build:
-	cd dashboard && npm ci && npm run build
+	cd ui && npm ci && npm run build
 	rm -rf pkg/ui/dist
 	mkdir -p pkg/ui/dist
-	cp -r dashboard/dist/. pkg/ui/dist/
+	cp -r ui/dist/. pkg/ui/dist/
 
 test:
 	go test ./...

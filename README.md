@@ -49,7 +49,7 @@ Or build from source:
 go build -o certhealthz .
 ```
 
-The `ui` command serves a bundled web UI (see [dashboard/](dashboard/)).
+The `ui` command serves a bundled web UI (see [ui/](ui/)).
 `go build` alone embeds a placeholder page for it; run `make dashboard-build`
 first to build the real UI and embed it into the binary, then `make build`.
 
@@ -142,7 +142,7 @@ MVP.
       `certhealthz scan --record` persists a run, `certhealthz history diff` reports what
       changed since the previous one.
 - [x] bundled lightweight dashboard: `certhealthz ui` serves the React UI in
-      `dashboard/` (embedded via `go:embed`, built with `make dashboard-build`) plus a
+      `ui/` (embedded via `go:embed`, built with `make dashboard-build`) plus a
       `/api/certs` JSON endpoint backed by a live scan.
 - [x] `goreleaser` for single-binary cross-platform distribution: see `.goreleaser.yaml`
       and `.github/workflows/release.yml` (tag push builds linux/darwin/windows,

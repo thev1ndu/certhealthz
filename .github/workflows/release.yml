@@ -24,7 +24,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: dashboard/package-lock.json
+          cache-dependency-path: ui/package-lock.json
 
       - uses: goreleaser/goreleaser-action@v7
         with:

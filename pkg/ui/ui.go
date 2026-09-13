@@ -1,4 +1,4 @@
-// Package ui embeds the built React dashboard (see /dashboard) into
+// Package ui embeds the built React dashboard (see /ui) into
 // the certhealthz binary so `certhealthz ui` can serve it with no
 // separate static file deployment. Run `make dashboard-build` to populate
 // dist/ with the real build before compiling a release binary; until then
