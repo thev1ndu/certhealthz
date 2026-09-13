@@ -24,7 +24,7 @@ type Payload struct {
 func Send(url string, rows []output.Row) error {
 	var flagged []output.Row
 	for _, r := range rows {
-		if r.Status == "expiring" || r.Status == "expired" || r.Status == "error" {
+		if r.Status == "expiring" || r.Status == "expired" || r.Status == "error" || r.Status == "drift" {
 			flagged = append(flagged, r)
 		}
 	}

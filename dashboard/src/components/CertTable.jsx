@@ -8,12 +8,15 @@ import {
   MagnifyingGlassIcon,
 } from "@phosphor-icons/react";
 
-// Kumo Badge `appearance="dot"` only renders a dot for these four variants.
+// Kumo Badge `appearance="dot"` only renders a dot for these four variants,
+// so "drift" reuses "error" — a Ready Certificate whose Secret doesn't
+// actually match is as urgent as an expired one, just for a different reason.
 export const STATUS_BADGE = {
   ok: "success",
   expiring: "warning",
   expired: "error",
   error: "neutral",
+  drift: "error",
 };
 
 export const STATUS_LABEL = {
@@ -21,6 +24,7 @@ export const STATUS_LABEL = {
   expiring: "Expiring",
   expired: "Expired",
   error: "Error",
+  drift: "Drift",
 };
 
 const COLUMNS = [

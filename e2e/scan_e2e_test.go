@@ -29,6 +29,7 @@ func TestScanEndToEnd(t *testing.T) {
 
 	dyn := newFakeDynamicClient(readyCR, notReadyCR)
 	typed := newFakeTypedClient(
+		newTLSSecret("healthy-tls", healthyCert),
 		newTLSSecret("expiring-tls", expiringCert),
 		newTLSSecret("expired-tls", expiredCert),
 	)

@@ -26,7 +26,7 @@ const rawCerts = [
     name: "checkout-api-tls",
     days: 2,
     status: "expiring",
-    detail: "matches Certificate — no drift",
+    detail: "",
   },
   {
     source: "cert-manager",
@@ -43,8 +43,27 @@ const rawCerts = [
     namespace: "billing",
     name: "billing-webhook-tls",
     days: -41,
-    status: "error",
-    detail: "drift: Certificate says Ready, Secret cert expired 41d ago",
+    status: "expired",
+    detail: "",
+  },
+  {
+    source: "cert-manager",
+    cluster: "prod-eu",
+    namespace: "payments",
+    name: "payments-gateway-tls",
+    days: 45,
+    status: "drift",
+    detail:
+      "Certificate reports Ready with expiry in 45d, but Secret payments/payments-gateway-tls's actual leaf cert expires in 3d",
+  },
+  {
+    source: "secret",
+    cluster: "prod-eu",
+    namespace: "payments",
+    name: "payments-gateway-tls",
+    days: 3,
+    status: "expiring",
+    detail: "",
   },
   {
     source: "endpoint",
@@ -80,7 +99,7 @@ const rawCerts = [
     name: "asgardeo-idp-tls",
     days: 34,
     status: "ok",
-    detail: "matches Certificate — no drift",
+    detail: "",
   },
   {
     source: "endpoint",

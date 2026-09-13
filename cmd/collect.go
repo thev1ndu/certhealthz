@@ -37,7 +37,19 @@ func buildClusterClients(label string, kubeconfig []byte, path string, includeSe
 		return ClusterClients{}, fmt.Errorf("building client for %s: %w", label, err)
 	}
 
-	cc := ClusterClients{Label: label, Dyn: dynClient}
+	// Prefer the kubeconfig's own current-context cluster name (e.g.
+	// "kubernetes") over label, which is just the kubeconfig's path or
+	// upload filename (e.g. "admin.conf") and rarely matches the cluster.
+	clusterLabel := label
+	if kubeconfig != nil {
+		if name := certmanager.ClusterNameFromBytes(kubeconfig); name != "" {
+			clusterLabel = name
+		}
+	} else if name := certmanager.ClusterName(path); name != "" {
+		clusterLabel = name
+	}
+
+	cc := ClusterClients{Label: clusterLabel, Dyn: dynClient}
 
 	if includeSecrets {
 		var typedClient kubernetes.Interface
@@ -94,6 +106,23 @@ func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnD
 	for _, target := range targets {
 		clusterLabel := target.Label
 
+		// Scanned up front (when requested) so the cert-manager loop below can
+		// cross-check each Ready Certificate against its backing Secret's
+		// actual leaf cert, not just trust the Certificate's own status.
+		var secrets []certmanager.SecretCert
+		var secretsByKey map[string]certmanager.SecretCert
+		if includeSecrets {
+			var err error
+			secrets, err = certmanager.ScanSecrets(ctx, clusterLabel, target.Typed)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+			}
+			secretsByKey = make(map[string]certmanager.SecretCert, len(secrets))
+			for _, s := range secrets {
+				secretsByKey[s.Namespace+"/"+s.Name] = s
+			}
+		}
+
 		certs, err := certmanager.Scan(ctx, clusterLabel, target.Dyn)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
@@ -101,9 +130,15 @@ func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnD
 		for _, c := range certs {
 			status := "ok"
 			detail := ""
-			if !c.Ready {
+			switch {
+			case !c.Ready:
 				status = "error"
 				detail = "not ready: " + c.FailReason
+			case includeSecrets:
+				if drifted, why := certmanager.CheckDrift(c, secretsByKey); drifted {
+					status = "drift"
+					detail = why
+				}
 			}
 			row := output.Row{
 				Source:    "cert-manager",
@@ -114,17 +149,13 @@ func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnD
 				Status:    status,
 				Detail:    detail,
 			}
-			if status != "error" {
+			if status != "error" && status != "drift" {
 				row = output.Classify(row, warnDays)
 			}
 			rows = append(rows, row)
 		}
 
 		if includeSecrets {
-			secrets, err := certmanager.ScanSecrets(ctx, clusterLabel, target.Typed)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: %v\n", err)
-			}
 			for _, s := range secrets {
 				row := output.Row{
 					Source:    "secret",

@@ -68,3 +68,40 @@ func NewTypedClientFromBytes(kubeconfig []byte) (kubernetes.Interface, error) {
 func restConfigFromBytes(kubeconfig []byte) (*rest.Config, error) {
 	return clientcmd.RESTConfigFromKubeConfig(kubeconfig)
 }
+
+// ClusterName resolves the actual cluster name (e.g. "kubernetes") from a
+// kubeconfig path's current context, rather than the kubeconfig file itself
+// — a kubeconfig is usually named after its role (admin.conf, staging.yaml),
+// not the cluster it points at. Returns "" if it can't be resolved (missing
+// file, no current context, etc); callers should fall back to something
+// else in that case.
+func ClusterName(kubeconfigPath string) string {
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if kubeconfigPath != "" {
+		loadingRules.ExplicitPath = kubeconfigPath
+	}
+	cc := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &clientcmd.ConfigOverrides{})
+	return clusterNameFromConfig(cc)
+}
+
+// ClusterNameFromBytes is the in-memory-kubeconfig counterpart to
+// ClusterName, for kubeconfigs uploaded rather than read off disk.
+func ClusterNameFromBytes(kubeconfig []byte) string {
+	cc, err := clientcmd.NewClientConfigFromBytes(kubeconfig)
+	if err != nil {
+		return ""
+	}
+	return clusterNameFromConfig(cc)
+}
+
+func clusterNameFromConfig(cc clientcmd.ClientConfig) string {
+	raw, err := cc.RawConfig()
+	if err != nil || raw.CurrentContext == "" {
+		return ""
+	}
+	ctx, ok := raw.Contexts[raw.CurrentContext]
+	if !ok {
+		return ""
+	}
+	return ctx.Cluster
+}

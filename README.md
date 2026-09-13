@@ -117,7 +117,11 @@ MVP.
 - [x] cert-manager `Certificate` scan across multiple kubeconfigs
 - [x] raw `kubernetes.io/tls` Secret scan (leaf cert parsed directly, independent of Certificate status)
 - [x] live TLS endpoint probe (`probe` command, concurrent)
-- [x] threshold-tiered status classification (`ok` / `expiring` / `expired` / `error`)
+- [x] threshold-tiered status classification (`ok` / `expiring` / `expired` / `error` / `drift`)
+- [x] drift detection: a Ready cert-manager Certificate is cross-checked against its backing
+      Secret's actual leaf cert; a missing Secret or a mismatched expiry flags the row `drift`
+      instead of trusting the Certificate's own status (surfaced in `scan`, `--webhook`, and the
+      dashboard)
 - [x] webhook alerting (Slack/ServiceNow/custom JSON POST) on flagged rows
 - [x] Prometheus exposition export (`cert_expiry_days` gauge)
 - [x] historical run diffing (SQLite) — track expiry trend, not just point-in-time snapshot:
@@ -132,8 +136,52 @@ MVP.
 
 ### Planned
 
-- [ ] drift detection: Certificate reports `Ready` but backing Secret's actual leaf cert is stale/mismatched
+**Detection coverage**
+
+- [ ] Ingress/Gateway API cross-reference: flag routes pointing at a Secret that's missing, expired, or SAN-mismatched against the route's host
+- [ ] cloud-managed cert scanning: AWS ACM, GCP Certificate Manager, Azure Key Vault — one report across k8s and cloud
+- [ ] Certificate Transparency log monitoring: catch certs issued for your domains outside any known cluster or cloud account (shadow/rogue issuance)
+- [ ] mTLS client-certificate expiry tracking, not just server certs
+
+**Trust & chain validation**
+
+- [ ] full chain validation: missing/expired intermediates, weak signature algorithm (SHA-1), undersized keys
+- [ ] OCSP/CRL revocation status check
+- [ ] issuer-change anomaly detection (cert for a domain suddenly issued by an unexpected CA)
+
+**Root cause & remediation**
+
 - [ ] renewal failure root-cause hints (rate-limit hit, DNS-01 challenge broken, webhook misconfig)
+- [ ] one-shot remediation: trigger cert-manager re-issuance directly (`certhealthz fix <name>`) instead of just reporting the stuck Certificate
+- [ ] admission webhook: warn or block on an Ingress/Gateway referencing an already-expiring cert
+
+**Alerting & workflow**
+
+- [ ] native Slack Block Kit / Teams adaptive-card formatting, not raw JSON in `text`
+- [ ] PagerDuty, Opsgenie, and email alert channels alongside webhook
+- [ ] alert de-dup and escalation (re-notify as expiry gets closer, don't just fire once)
+- [ ] per-namespace/per-team warn thresholds and alert routing
+
+**Operating at scale**
+
+- [ ] in-cluster mode: run as a Deployment/CronJob under a ServiceAccount, no kubeconfig needed
+- [ ] Helm chart for in-cluster install
+- [ ] CRD/operator (`CertHealthzPolicy`) for GitOps-managed thresholds and alert routing
+- [ ] dashboard auth (OIDC/SSO) — currently unauthenticated
+- [ ] trend charts in the dashboard, backed by the existing SQLite history
+- [ ] compliance export (CSV/PDF) — auditable evidence of cert hygiene for SOC2/PCI reviews
+
+### Growth
+
+- [ ] demo GIF/video of the dashboard at the top of the README
+- [ ] zero-setup demo (`docker run` or hosted playground with fake data, no kubeconfig needed)
+- [ ] comparison table vs cert-manager, Datadog cert monitoring, `testssl.sh`
+- [ ] Homebrew tap
+- [ ] `krew` plugin (kubectl plugin index)
+- [ ] submit to `awesome-kubernetes`, `awesome-go`, CNCF landscape
+- [ ] Codecov/test-coverage badge
+- [ ] CONTRIBUTING.md + good-first-issue labels
+- [ ] Show HN / r/kubernetes / r/devops launch post timed with a release
 
 ## License
 

@@ -16,7 +16,7 @@ type Row struct {
 	Namespace string
 	Name      string
 	NotAfter  time.Time
-	Status    string // "ok" | "expiring" | "expired" | "error"
+	Status    string // "ok" | "expiring" | "expired" | "error" | "drift"
 	Detail    string
 }
 

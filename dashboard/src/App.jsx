@@ -42,7 +42,7 @@ function matchesFilters(row, statusFilter, clusterFilter) {
   return true;
 }
 
-const SUMMARY_ORDER = ["expired", "expiring", "ok", "error"];
+const SUMMARY_ORDER = ["expired", "drift", "expiring", "ok", "error"];
 
 function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
