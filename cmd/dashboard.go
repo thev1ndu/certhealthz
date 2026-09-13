@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,10 +22,16 @@ import (
 // generous headroom without letting a client force unbounded allocation.
 const maxKubeconfigUploadSize = 10 << 20 // 10 MiB
 
+// maxEndpointBodySize bounds the POST /api/endpoints request body — it's
+// one short JSON field, never legitimately more than a few hundred bytes.
+const maxEndpointBodySize = 1 << 10 // 1 KiB
+
 var (
-	dashboardAddr       string
-	dashboardWarnDays   int
-	dashboardIncludeRaw bool
+	dashboardAddr         string
+	dashboardWarnDays     int
+	dashboardIncludeRaw   bool
+	dashboardEndpoints    []string
+	dashboardProbeTimeout time.Duration
 )
 
 // ClusterEntry identifies one cluster the dashboard scans. Kubeconfig is
@@ -79,7 +86,51 @@ func (c *ClusterRegistry) AddUpload(label string, kubeconfig []byte) error {
 	return nil
 }
 
-var dashboardClusters = NewClusterRegistry()
+// EndpointRegistry tracks live TLS endpoints the dashboard probes, beyond
+// whatever was passed via --probe at startup. Guarded by a mutex since the
+// HTTP handlers run concurrently.
+type EndpointRegistry struct {
+	mu    sync.Mutex
+	extra []string
+}
+
+// NewEndpointRegistry returns an empty registry, e.g. for tests that don't
+// go through the --probe-backed global.
+func NewEndpointRegistry() *EndpointRegistry {
+	return &EndpointRegistry{}
+}
+
+func (e *EndpointRegistry) All() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	all := make([]string, 0, len(dashboardEndpoints)+len(e.extra))
+	all = append(all, dashboardEndpoints...)
+	return append(all, e.extra...)
+}
+
+// Add registers an endpoint (host or host:port) added through the "Add
+// endpoint" UI, rejecting an exact duplicate of one already configured.
+func (e *EndpointRegistry) Add(endpoint string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, ep := range dashboardEndpoints {
+		if ep == endpoint {
+			return fmt.Errorf("endpoint %s is already configured", endpoint)
+		}
+	}
+	for _, ep := range e.extra {
+		if ep == endpoint {
+			return fmt.Errorf("endpoint %s is already configured", endpoint)
+		}
+	}
+	e.extra = append(e.extra, endpoint)
+	return nil
+}
+
+var (
+	dashboardClusters          = NewClusterRegistry()
+	dashboardEndpointsRegistry = NewEndpointRegistry()
+)
 
 var dashboardCmd = &cobra.Command{
 	Use:   "dashboard",
@@ -90,7 +141,9 @@ var dashboardCmd = &cobra.Command{
 func init() {
 	dashboardCmd.Flags().StringVar(&dashboardAddr, "addr", ":8090", "address to serve the dashboard on")
 	dashboardCmd.Flags().IntVar(&dashboardWarnDays, "warn-days", 14, "flag certificates expiring within this many days")
-	dashboardCmd.Flags().BoolVar(&dashboardIncludeRaw, "include-secrets", true, "also scan raw kubernetes.io/tls Secrets for drift against Certificate status")
+	dashboardCmd.Flags().BoolVar(&dashboardIncludeRaw, "include-secrets", true, "also scan raw kubernetes.io/tls Secrets, for Certificate drift detection and Ingress cross-referencing")
+	dashboardCmd.Flags().StringSliceVar(&dashboardEndpoints, "probe", nil, "live TLS endpoint (host or host:port) to probe on every scan; repeat flag for multiple")
+	dashboardCmd.Flags().DurationVar(&dashboardProbeTimeout, "probe-timeout", 5*time.Second, "per-endpoint dial timeout for --probe endpoints")
 	rootCmd.AddCommand(dashboardCmd)
 }
 
@@ -195,10 +248,46 @@ func handleAddCluster(clusters *ClusterRegistry, w http.ResponseWriter, r *http.
 	}
 }
 
+// handleAddEndpoint registers a live TLS endpoint (host or host:port) for
+// the dashboard to probe on every scan. Unlike a cluster upload, there's no
+// connectivity check here — an endpoint that's briefly unreachable is still
+// worth tracking; it'll just show up as an "error" row until it recovers,
+// same as it would from `certhealthz probe`.
+func handleAddEndpoint(endpoints *EndpointRegistry, w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Endpoint string `json:"endpoint"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxEndpointBodySize)).Decode(&body); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	endpoint := strings.TrimSpace(body.Endpoint)
+	if endpoint == "" {
+		http.Error(w, "endpoint is required", http.StatusBadRequest)
+		return
+	}
+	if strings.ContainsAny(endpoint, " \t\r\n") {
+		http.Error(w, "endpoint must not contain whitespace", http.StatusBadRequest)
+		return
+	}
+
+	if err := endpoints.Add(endpoint); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(endpoints.All()); err != nil {
+		log.Printf("encoding /api/endpoints response: %v", err)
+	}
+}
+
 // NewDashboardMux builds the dashboard's HTTP routing: the embedded UI plus
-// the /api/certs and /api/clusters endpoints. collect is injected so tests
-// can back /api/certs with fake clientsets instead of a real cluster.
-func NewDashboardMux(uiHandler http.Handler, collect func(context.Context) ([]output.Row, error), clusters *ClusterRegistry) *http.ServeMux {
+// the /api/certs, /api/clusters, and /api/endpoints endpoints. collect is
+// injected so tests can back /api/certs with fake clientsets instead of a
+// real cluster.
+func NewDashboardMux(uiHandler http.Handler, collect func(context.Context) ([]output.Row, error), clusters *ClusterRegistry, endpoints *EndpointRegistry) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/certs", func(w http.ResponseWriter, r *http.Request) {
 		rows, err := collect(r.Context())
@@ -220,6 +309,19 @@ func NewDashboardMux(uiHandler http.Handler, collect func(context.Context) ([]ou
 			}
 		case http.MethodPost:
 			handleAddCluster(clusters, w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	mux.HandleFunc("/api/endpoints", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(endpoints.All()); err != nil {
+				log.Printf("encoding /api/endpoints response: %v", err)
+			}
+		case http.MethodPost:
+			handleAddEndpoint(endpoints, w, r)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -253,9 +355,18 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 			clients = append(clients, cc)
 		}
 
-		return CollectRowsFromClients(ctx, clients, dashboardWarnDays, dashboardIncludeRaw)
+		rows, err := CollectRowsFromClients(ctx, clients, dashboardWarnDays, dashboardIncludeRaw)
+		if err != nil {
+			return nil, err
+		}
+
+		if endpoints := dashboardEndpointsRegistry.All(); len(endpoints) > 0 {
+			rows = append(rows, probeRows(endpoints, dashboardProbeTimeout, dashboardWarnDays)...)
+			output.Sort(rows)
+		}
+		return rows, nil
 	}
-	mux := NewDashboardMux(uiHandler, collect, dashboardClusters)
+	mux := NewDashboardMux(uiHandler, collect, dashboardClusters, dashboardEndpointsRegistry)
 
 	fmt.Printf("certhealthz dashboard listening on %s\n", dashboardAddr)
 	server := &http.Server{

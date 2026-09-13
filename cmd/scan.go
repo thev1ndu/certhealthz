@@ -30,7 +30,7 @@ func init() {
 	scanCmd.Flags().IntVar(&scanWarnDays, "warn-days", 14, "flag certificates expiring within this many days")
 	scanCmd.Flags().StringVar(&scanWebhookURL, "webhook", "", "webhook URL to POST flagged certificates to (Slack/ServiceNow/custom)")
 	scanCmd.Flags().BoolVar(&scanPrometheus, "prometheus", false, "print Prometheus exposition format instead of a table")
-	scanCmd.Flags().BoolVar(&scanIncludeRaw, "include-secrets", true, "also scan raw kubernetes.io/tls Secrets for drift against Certificate status")
+	scanCmd.Flags().BoolVar(&scanIncludeRaw, "include-secrets", true, "also scan raw kubernetes.io/tls Secrets, for Certificate drift detection and Ingress cross-referencing")
 	scanCmd.Flags().BoolVar(&scanRecord, "record", false, "persist this scan to the history database for trend diffing (see: certhealthz history diff)")
 	scanCmd.Flags().StringVar(&scanDBPath, "db", defaultHistoryDBPath, "path to the SQLite history database used by --record and history diff")
 	rootCmd.AddCommand(scanCmd)

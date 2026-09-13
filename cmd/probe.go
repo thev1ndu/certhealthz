@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/thev1ndu/certhealthz/pkg/alert"
 	"github.com/thev1ndu/certhealthz/pkg/output"
-	"github.com/thev1ndu/certhealthz/pkg/probe"
 )
 
 var (
@@ -34,26 +33,7 @@ func init() {
 }
 
 func runProbe(_ *cobra.Command, endpoints []string) error {
-	results := probe.ProbeAll(endpoints, probeTimeout)
-
-	var rows []output.Row
-	for _, r := range results {
-		row := output.Row{
-			Source: "endpoint",
-			Name:   r.Endpoint,
-			Detail: r.Issuer,
-		}
-		if r.Err != nil {
-			row.Status = "error"
-			row.Detail = r.Err.Error()
-			rows = append(rows, row)
-			continue
-		}
-		row.NotAfter = r.NotAfter
-		row = output.Classify(row, probeWarnDays)
-		rows = append(rows, row)
-	}
-
+	rows := probeRows(endpoints, probeTimeout, probeWarnDays)
 	output.Sort(rows)
 
 	if probePrometheus {

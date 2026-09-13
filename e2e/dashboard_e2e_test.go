@@ -14,6 +14,7 @@ import (
 
 	"github.com/thev1ndu/certhealthz/cmd"
 	"github.com/thev1ndu/certhealthz/pkg/output"
+	"github.com/thev1ndu/certhealthz/pkg/probe"
 	"github.com/thev1ndu/certhealthz/pkg/ui"
 )
 
@@ -54,7 +55,7 @@ func TestDashboardCertsEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ui.Handler: %v", err)
 	}
-	mux := cmd.NewDashboardMux(uiHandler, collect, cmd.NewClusterRegistry())
+	mux := cmd.NewDashboardMux(uiHandler, collect, cmd.NewClusterRegistry(), cmd.NewEndpointRegistry())
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
@@ -94,6 +95,100 @@ func TestDashboardCertsEndToEnd(t *testing.T) {
 	}
 }
 
+// TestDashboardEndpointsEndToEnd drives POST/GET /api/endpoints against a
+// real HTTP server, then wires a collect closure the same way runDashboard
+// does (cluster rows + probed endpoint rows, merged and sorted) to assert a
+// registered endpoint actually shows up in /api/certs.
+func TestDashboardEndpointsEndToEnd(t *testing.T) {
+	notAfter := time.Now().Add(30 * 24 * time.Hour).Truncate(time.Second)
+	cert := generateCert(t, "127.0.0.1", notAfter)
+	addr := startTLSServer(t, cert)
+
+	uiHandler, err := ui.Handler()
+	if err != nil {
+		t.Fatalf("ui.Handler: %v", err)
+	}
+
+	endpoints := cmd.NewEndpointRegistry()
+	collect := func(ctx context.Context) ([]output.Row, error) {
+		var rows []output.Row
+		for _, ep := range endpoints.All() {
+			result := probe.Probe(ep, 2*time.Second, probe.WithRootCAs(certPool(cert)))
+			row := output.Row{Source: "endpoint", Name: result.Endpoint, Detail: result.Issuer}
+			if result.Err != nil {
+				row.Status = "error"
+				row.Detail = result.Err.Error()
+			} else {
+				row.NotAfter = result.NotAfter
+				row = output.Classify(row, 14)
+			}
+			rows = append(rows, row)
+		}
+		return rows, nil
+	}
+	mux := cmd.NewDashboardMux(uiHandler, collect, cmd.NewClusterRegistry(), endpoints)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	// Before adding anything, the list is empty.
+	resp, err := http.Get(server.URL + "/api/endpoints")
+	if err != nil {
+		t.Fatalf("GET /api/endpoints: %v", err)
+	}
+	var before []string
+	if err := json.NewDecoder(resp.Body).Decode(&before); err != nil {
+		t.Fatalf("decoding /api/endpoints response: %v", err)
+	}
+	resp.Body.Close()
+	if len(before) != 0 {
+		t.Fatalf("expected no endpoints configured yet, got %v", before)
+	}
+
+	// Add the local TLS listener as an endpoint.
+	body, _ := json.Marshal(map[string]string{"endpoint": addr})
+	resp, err = http.Post(server.URL+"/api/endpoints", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /api/endpoints: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Adding the same endpoint again is rejected.
+	resp, err = http.Post(server.URL+"/api/endpoints", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /api/endpoints (duplicate): %v", err)
+	}
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("expected 409 for duplicate endpoint, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// It now shows up as a probed row in /api/certs.
+	resp, err = http.Get(server.URL + "/api/certs")
+	if err != nil {
+		t.Fatalf("GET /api/certs: %v", err)
+	}
+	defer resp.Body.Close()
+	var rows []apiRow
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		t.Fatalf("decoding /api/certs response: %v", err)
+	}
+	found := false
+	for _, r := range rows {
+		if r.Source == "endpoint" && r.Name == addr {
+			found = true
+			if r.Status != "ok" {
+				t.Errorf("expected probed endpoint status 'ok', got %q", r.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a probed endpoint row for %s, got %+v", addr, rows)
+	}
+}
+
 // TestDashboardAddClusterRejectsBadKubeconfigEndToEnd asserts POST
 // /api/clusters fails fast with 400 on an invalid uploaded kubeconfig,
 // without needing a fake clientset (the validation happens before any
@@ -104,7 +199,7 @@ func TestDashboardAddClusterRejectsBadKubeconfigEndToEnd(t *testing.T) {
 		t.Fatalf("ui.Handler: %v", err)
 	}
 	noopCollect := func(ctx context.Context) ([]output.Row, error) { return nil, nil }
-	mux := cmd.NewDashboardMux(uiHandler, noopCollect, cmd.NewClusterRegistry())
+	mux := cmd.NewDashboardMux(uiHandler, noopCollect, cmd.NewClusterRegistry(), cmd.NewEndpointRegistry())
 	server := httptest.NewServer(mux)
 	defer server.Close()
 

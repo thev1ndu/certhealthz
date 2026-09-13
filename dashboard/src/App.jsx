@@ -3,6 +3,7 @@ import {
   Badge,
   Button,
   DropdownMenu,
+  Input,
   InputGroup,
   LayerCard,
   Popover,
@@ -18,6 +19,7 @@ import {
   FunnelIcon,
   GearSixIcon,
   MagnifyingGlassIcon,
+  PlugsConnectedIcon,
   PlusIcon,
   XIcon,
 } from "@phosphor-icons/react";
@@ -103,6 +105,41 @@ export default function App() {
       })
       .catch((err) => setAddClusterError(String(err.message || err)))
       .finally(() => setAddClusterBusy(false));
+  }
+
+  const [addEndpointOpen, setAddEndpointOpen] = useState(false);
+  const [addEndpointValue, setAddEndpointValue] = useState("");
+  const [addEndpointError, setAddEndpointError] = useState("");
+  const [addEndpointBusy, setAddEndpointBusy] = useState(false);
+
+  function resetAddEndpoint() {
+    setAddEndpointValue("");
+    setAddEndpointError("");
+  }
+
+  function submitAddEndpoint() {
+    const endpoint = addEndpointValue.trim();
+    if (!endpoint) {
+      setAddEndpointError("Enter a host or host:port");
+      return;
+    }
+    setAddEndpointBusy(true);
+    setAddEndpointError("");
+    fetch("/api/endpoints", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint }),
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(await res.text());
+        return reloadCerts();
+      })
+      .then(() => {
+        setAddEndpointOpen(false);
+        resetAddEndpoint();
+      })
+      .catch((err) => setAddEndpointError(String(err.message || err)))
+      .finally(() => setAddEndpointBusy(false));
   }
 
   const rows = useMemo(
@@ -394,6 +431,87 @@ export default function App() {
             <Tooltip content="No backend wired up in this preview">
               <Button variant="primary" icon={PlusIcon} disabled>
                 Add cluster
+              </Button>
+            </Tooltip>
+          )}
+          {isLive ? (
+            <Popover
+              open={addEndpointOpen}
+              onOpenChange={(open) => {
+                setAddEndpointOpen(open);
+                if (!open) resetAddEndpoint();
+              }}
+            >
+              <Popover.Trigger
+                render={(p) => (
+                  <Button {...p} variant="secondary" icon={PlugsConnectedIcon}>
+                    Add endpoint
+                  </Button>
+                )}
+              />
+              <Popover.Content className="w-96 p-6">
+                <div className="mb-4 flex items-start justify-between gap-4">
+                  <Popover.Title className="text-lg font-semibold">
+                    Add endpoint
+                  </Popover.Title>
+                  <Popover.Close
+                    aria-label="Close"
+                    render={(p) => (
+                      <Button
+                        {...p}
+                        variant="secondary"
+                        shape="square"
+                        icon={<XIcon />}
+                        aria-label="Close"
+                      />
+                    )}
+                  />
+                </div>
+                <Popover.Description className="mb-4 text-kumo-subtle">
+                  Probe a live TLS endpoint on every scan, alongside your
+                  clusters — a vendor API, a load balancer, anything
+                  cert-manager doesn't manage.
+                </Popover.Description>
+
+                <Input
+                  placeholder="example.com or example.com:8443"
+                  value={addEndpointValue}
+                  onChange={(e) => {
+                    setAddEndpointValue(e.target.value);
+                    setAddEndpointError("");
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") submitAddEndpoint();
+                  }}
+                />
+                {addEndpointError && (
+                  <Text variant="error" size="sm" className="mt-2 block">
+                    {addEndpointError}
+                  </Text>
+                )}
+
+                <div className="mt-4 flex justify-end gap-2">
+                  <Popover.Close
+                    render={(p) => (
+                      <Button {...p} variant="secondary">
+                        Cancel
+                      </Button>
+                    )}
+                  />
+                  <Button
+                    variant="primary"
+                    onClick={submitAddEndpoint}
+                    disabled={addEndpointBusy || !addEndpointValue.trim()}
+                  >
+                    {addEndpointBusy ? "Adding…" : "Add"}
+                  </Button>
+                </div>
+              </Popover.Content>
+            </Popover>
+          ) : (
+            <Tooltip content="No backend wired up in this preview">
+              <Button variant="secondary" icon={PlugsConnectedIcon} disabled>
+                Add endpoint
               </Button>
             </Tooltip>
           )}

@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/thev1ndu/certhealthz/pkg/certmanager"
+	"github.com/thev1ndu/certhealthz/pkg/ingress"
 	"github.com/thev1ndu/certhealthz/pkg/output"
+	"github.com/thev1ndu/certhealthz/pkg/probe"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
@@ -167,9 +170,86 @@ func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnD
 				row = output.Classify(row, warnDays)
 				rows = append(rows, row)
 			}
+
+			routes, err := ingress.Scan(ctx, clusterLabel, target.Typed)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+			}
+			rows = append(rows, ingressRoutesRows(routes, secretsByKey, warnDays)...)
 		}
 	}
 
 	output.Sort(rows)
 	return rows, nil
+}
+
+// probeRows runs probe.ProbeAll against endpoints and converts the results
+// into classified rows. Shared by `probe` and the dashboard's live
+// endpoint list so both report a probed endpoint the same way.
+func probeRows(endpoints []string, timeout time.Duration, warnDays int) []output.Row {
+	results := probe.ProbeAll(endpoints, timeout)
+	rows := make([]output.Row, 0, len(results))
+	for _, r := range results {
+		row := output.Row{
+			Source: "endpoint",
+			Name:   r.Endpoint,
+			Detail: r.Issuer,
+		}
+		if r.Err != nil {
+			row.Status = "error"
+			row.Detail = r.Err.Error()
+			rows = append(rows, row)
+			continue
+		}
+		row.NotAfter = r.NotAfter
+		row = output.Classify(row, warnDays)
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// ingressRoutesRows cross-checks each Ingress TLS route against its backing
+// Secret: missing entirely, or present but not actually covering the
+// route's host (wrong/no matching SAN). One row per route×host, or one row
+// for the route itself if it declares no hosts. A route whose Secret is
+// present and covers every declared host is still reported, classified by
+// that Secret's real expiry — the same tiers as a plain secret row.
+func ingressRoutesRows(routes []ingress.Route, secretsByKey map[string]certmanager.SecretCert, warnDays int) []output.Row {
+	var rows []output.Row
+	for _, route := range routes {
+		key := route.Namespace + "/" + route.SecretName
+		secret, ok := secretsByKey[key]
+
+		hosts := route.Hosts
+		if len(hosts) == 0 {
+			hosts = []string{""}
+		}
+
+		for _, host := range hosts {
+			name := route.Ingress
+			if host != "" {
+				name = fmt.Sprintf("%s (%s)", route.Ingress, host)
+			}
+			row := output.Row{
+				Source:    "ingress",
+				Cluster:   route.Cluster,
+				Namespace: route.Namespace,
+				Name:      name,
+			}
+			switch {
+			case !ok:
+				row.Status = "error"
+				row.Detail = fmt.Sprintf("Secret %s not found", key)
+			case host != "" && !ingress.AnyHostCovered(secret.DNSNames, host):
+				row.NotAfter = secret.NotAfter
+				row.Status = "error"
+				row.Detail = fmt.Sprintf("host %s not covered by Secret %s's certificate SANs %v", host, key, secret.DNSNames)
+			default:
+				row.NotAfter = secret.NotAfter
+				row = output.Classify(row, warnDays)
+			}
+			rows = append(rows, row)
+		}
+	}
+	return rows
 }

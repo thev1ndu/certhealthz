@@ -21,6 +21,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -173,14 +174,23 @@ func newFakeDynamicClient(certs ...*unstructured.Unstructured) *dynamicfake.Fake
 }
 
 // newFakeTypedClient builds a kubernetes.Interface seeded with the given
-// Secrets, in place of certmanager.NewTypedClient's real kubeconfig-backed
-// client.
-func newFakeTypedClient(secrets ...*corev1.Secret) kubernetes.Interface {
-	objs := make([]runtime.Object, len(secrets))
-	for i, s := range secrets {
-		objs[i] = s
-	}
+// objects (Secrets, Ingresses, ...), in place of certmanager.NewTypedClient's
+// real kubeconfig-backed client.
+func newFakeTypedClient(objs ...runtime.Object) kubernetes.Interface {
 	return kubernetesfake.NewSimpleClientset(objs...)
+}
+
+// newIngress builds an Ingress with a single TLS block, matching the shape
+// ingress.Scan reads (spec.tls[].secretName, spec.tls[].hosts).
+func newIngress(namespace, name, secretName string, hosts ...string) *networkingv1.Ingress {
+	return &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
+		Spec: networkingv1.IngressSpec{
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: hosts, SecretName: secretName},
+			},
+		},
+	}
 }
 
 // startTLSServer listens on 127.0.0.1 with the given certificate and

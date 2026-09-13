@@ -11,7 +11,7 @@ import (
 // Row is a single unified expiry-report line, regardless of whether it
 // came from a cert-manager Certificate, a raw Secret, or a live endpoint probe.
 type Row struct {
-	Source    string // "cert-manager" | "secret" | "endpoint"
+	Source    string // "cert-manager" | "secret" | "endpoint" | "ingress"
 	Cluster   string
 	Namespace string
 	Name      string

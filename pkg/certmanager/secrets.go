@@ -14,12 +14,14 @@ import (
 
 // SecretCert is the parsed x509 reality behind a kubernetes.io/tls Secret,
 // used to catch Certificate objects reporting Ready while the backing
-// secret has actually drifted (stale cert, failed silent renewal, etc).
+// secret has actually drifted (stale cert, failed silent renewal, etc), and
+// to check Ingress routes against what the cert actually covers.
 type SecretCert struct {
 	Cluster   string
 	Namespace string
 	Name      string
 	NotAfter  time.Time
+	DNSNames  []string
 }
 
 // ScanSecrets lists every kubernetes.io/tls Secret and parses its leaf
@@ -63,5 +65,6 @@ func parseSecret(cluster string, s corev1.Secret) (SecretCert, bool) {
 		Namespace: s.Namespace,
 		Name:      s.Name,
 		NotAfter:  cert.NotAfter,
+		DNSNames:  cert.DNSNames,
 	}, true
 }
