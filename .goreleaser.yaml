@@ -1,0 +1,59 @@
+version: 2
+
+before:
+  hooks:
+    - make dashboard-build
+
+builds:
+  - id: certhealthz
+    main: .
+    binary: certhealthz
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: certhealthz
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+brews:
+  - name: certhealthz
+    repository:
+      owner: thev1ndu
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/thev1ndu/certhealthz"
+    description: "Multi-cluster TLS/certificate expiry radar — single binary, no CRD, no in-cluster install"
+    license: "MIT"
+    install: |
+      bin.install "certhealthz"
+    test: |
+      system "#{bin}/certhealthz --help"
+
+release:
+  github:
+    owner: thev1ndu
+    name: certhealthz

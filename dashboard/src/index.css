@@ -1,0 +1,35 @@
+/*
+ * Almost everything here is handled by Kumo: layout/spacing come from the
+ * utility classes bundled in `@cloudflare/kumo/styles/standalone`, and all
+ * colors come from Kumo semantic tokens (`--color-kumo-*`, `--text-color-kumo-*`)
+ * or `text-kumo-*` / `bg-kumo-*` utilities. What is left below is only the
+ * handful of values Kumo has no token or bundled utility for.
+ */
+
+html {
+  scroll-behavior: smooth;
+  /* Kumo's base tokens resolve through `light-dark()`; `data-mode="dark"` on
+     <html> pins them to dark, and this keeps form controls/scrollbars matching. */
+  color-scheme: dark only;
+}
+
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100svh;
+}
+
+/* Kumo's bundled utility subset has no `max-w-*` at this size. */
+.shell {
+  max-width: 1180px;
+}
+
+/* `Text as="pre"` keeps Kumo's mono type scale; only wrapping behaviour is ours. */
+.json-dump {
+  margin: 0;
+  overflow-x: auto;
+  line-height: 1.6;
+}
