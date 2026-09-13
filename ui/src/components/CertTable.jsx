@@ -1,5 +1,4 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { Badge, Button, Empty, Table, Text, Tooltip } from "@cloudflare/kumo";
 import {
   CaretDownIcon,
   CaretUpDownIcon,
@@ -7,31 +6,26 @@ import {
   InfoIcon,
   MagnifyingGlassIcon,
 } from "@phosphor-icons/react";
+import StatusBadge, { STATUS_LABEL } from "@/components/StatusBadge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { cn } from "@/lib/utils";
 
-// Kumo Badge `appearance="dot"` only renders a dot for these four variants,
-// so "drift" reuses "error" — a Ready Certificate whose Secret doesn't
-// actually match is as urgent as an expired one, just for a different reason.
-export const STATUS_BADGE = {
-  ok: "success",
-  expiring: "warning",
-  expired: "error",
-  error: "neutral",
-  drift: "error",
-};
-
-export const STATUS_LABEL = {
-  ok: "Healthy",
-  expiring: "Expiring",
-  expired: "Expired",
-  error: "Error",
-  drift: "Drift",
-};
+export { STATUS_LABEL };
 
 const COLUMNS = [
   {
     id: "name",
     label: "Name",
-    width: 240,
+    width: 260,
     min: 160,
     description:
       "The certificate's name, from cert-manager, its Secret, or the scanned endpoint.",
@@ -39,7 +33,7 @@ const COLUMNS = [
   {
     id: "source",
     label: "Source",
-    width: 140,
+    width: 130,
     min: 100,
     description:
       "Where certhealthz found this certificate: a cert-manager Certificate, a raw Secret, or a live TLS endpoint probe.",
@@ -55,7 +49,7 @@ const COLUMNS = [
   {
     id: "status",
     label: "Status",
-    width: 140,
+    width: 130,
     min: 110,
     description:
       "Health tier based on days remaining: Healthy, Expiring soon, Expired, or a scan/renewal Error.",
@@ -119,6 +113,16 @@ function useColumnWidths() {
   return { widths, onResizeStart };
 }
 
+function ResizeHandle({ onMouseDown, onTouchStart }) {
+  return (
+    <span
+      onMouseDown={onMouseDown}
+      onTouchStart={onTouchStart}
+      className="absolute inset-y-0 right-0 z-10 w-2 cursor-col-resize touch-none select-none after:absolute after:inset-y-1 after:right-[3px] after:w-px after:bg-border hover:after:bg-primary"
+    />
+  );
+}
+
 function SortHead({ column, sort, onSort }) {
   const active = sort.id === column.id;
   const Caret = !active
@@ -128,20 +132,25 @@ function SortHead({ column, sort, onSort }) {
       : CaretDownIcon;
 
   return (
-    <Tooltip content={column.description}>
-      <Button
-        variant="ghost"
-        size="xs"
-        onClick={() => onSort(column.id)}
-        aria-label={`Sort by ${column.label}`}
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            onClick={() => onSort(column.id)}
+            aria-label={`Sort by ${column.label}`}
+            className="inline-flex items-center gap-1 font-mono text-[11px] font-medium tracking-wider text-muted-foreground uppercase hover:text-foreground"
+          />
+        }
       >
         {column.label}
         <Caret
           size={12}
           weight="bold"
-          className={active ? "text-kumo-link" : "text-kumo-inactive"}
+          className={active ? "text-primary" : "text-muted-foreground/50"}
         />
-      </Button>
+      </TooltipTrigger>
+      <TooltipContent>{column.description}</TooltipContent>
     </Tooltip>
   );
 }
@@ -172,93 +181,91 @@ export default function CertTable({ rows }) {
 
   return (
     <div className="overflow-x-auto">
-      <Table layout="fixed">
+      <Table className="table-fixed">
         <colgroup>
-          <col style={{ width: 40 }} />
+          <col style={{ width: 36 }} />
           {COLUMNS.map((c) => (
             <col key={c.id} style={{ width: widths[c.id] }} />
           ))}
         </colgroup>
-        <Table.Header>
-          <Table.Row>
-            <Table.Head />
+        <TableHeader>
+          <TableRow className="border-border hover:bg-transparent">
+            <TableHead />
             {COLUMNS.map((c) => (
-              <Table.Head key={c.id}>
+              <TableHead key={c.id} className="relative h-9 px-3">
                 <SortHead column={c} sort={sort} onSort={handleSort} />
-                <Table.ResizeHandle
+                <ResizeHandle
                   onMouseDown={onResizeStart(c.id, c.min)}
                   onTouchStart={onResizeStart(c.id, c.min)}
                 />
-              </Table.Head>
+              </TableHead>
             ))}
-          </Table.Row>
-        </Table.Header>
-        <Table.Body>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {sortedRows.map((row) => (
-            <Table.Row key={row.id}>
-              <Table.Cell>
-                <Tooltip content={row.detail || "No additional detail"}>
-                  <span className="inline-flex text-kumo-link">
-                    <InfoIcon size={15} weight="fill" />
-                  </span>
+            <TableRow key={row.id} className="border-border/60">
+              <TableCell className="px-3">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span className="inline-flex text-primary/70 hover:text-primary" />
+                    }
+                  >
+                    <InfoIcon size={14} weight="fill" />
+                  </TooltipTrigger>
+                  <TooltipContent>{row.detail || "No additional detail"}</TooltipContent>
                 </Tooltip>
-              </Table.Cell>
-              <Table.Cell>
-                <div className="flex flex-col">
-                  <Text as="span" size="sm" bold truncate>
-                    {row.name}
-                  </Text>
+              </TableCell>
+              <TableCell className="px-3">
+                <div className="flex flex-col gap-0.5">
+                  <span className="truncate text-sm font-medium">{row.name}</span>
                   {row.namespace !== "-" && (
-                    <Text as="span" variant="mono-secondary" size="xs" truncate>
+                    <span className="truncate font-mono text-xs text-muted-foreground">
                       /{row.namespace}
-                    </Text>
+                    </span>
                   )}
                 </div>
-              </Table.Cell>
-              <Table.Cell>
-                <Text as="span" variant="mono-secondary" size="sm">
-                  {row.source}
-                </Text>
-              </Table.Cell>
-              <Table.Cell>
-                <Text
-                  as="span"
-                  size="sm"
-                  variant={row.cluster === "-" ? "secondary" : "body"}
+              </TableCell>
+              <TableCell className="px-3">
+                <span className="font-mono text-xs text-muted-foreground">{row.source}</span>
+              </TableCell>
+              <TableCell className="px-3">
+                <span
+                  className={cn(
+                    "text-sm",
+                    row.cluster === "-" ? "text-muted-foreground" : "text-foreground",
+                  )}
                 >
                   {row.cluster}
-                </Text>
-              </Table.Cell>
-              <Table.Cell>
-                <Badge variant={STATUS_BADGE[row.status]} appearance="dot">
-                  {STATUS_LABEL[row.status]}
-                </Badge>
-              </Table.Cell>
-              <Table.Cell>
-                <Text
-                  as="span"
-                  variant="mono"
-                  size="sm"
-                  DANGEROUS_className="tabular-nums"
-                >
+                </span>
+              </TableCell>
+              <TableCell className="px-3">
+                <StatusBadge status={row.status} />
+              </TableCell>
+              <TableCell className="px-3">
+                <span className="font-mono text-sm tabular-nums">
                   {row.days === null ? "—" : `${row.days}d`}
-                </Text>
-              </Table.Cell>
-            </Table.Row>
+                </span>
+              </TableCell>
+            </TableRow>
           ))}
           {sortedRows.length === 0 && (
-            <Table.Row>
-              <Table.Cell colSpan={COLUMNS.length + 1}>
-                <Empty
-                  size="sm"
-                  icon={<MagnifyingGlassIcon size={32} />}
-                  title="No certificates match this filter"
-                  description="Try a different cluster, namespace, or certificate name."
-                />
-              </Table.Cell>
-            </Table.Row>
+            <TableRow className="hover:bg-transparent">
+              <TableCell colSpan={COLUMNS.length + 1} className="py-2">
+                <Empty className="border-0 p-10">
+                  <EmptyMedia variant="icon">
+                    <MagnifyingGlassIcon size={20} />
+                  </EmptyMedia>
+                  <EmptyTitle>No certificates match this filter</EmptyTitle>
+                  <EmptyDescription>
+                    Try a different cluster, namespace, or certificate name.
+                  </EmptyDescription>
+                </Empty>
+              </TableCell>
+            </TableRow>
           )}
-        </Table.Body>
+        </TableBody>
       </Table>
     </div>
   );

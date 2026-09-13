@@ -32,11 +32,11 @@ type apiRow struct {
 	Detail    string `json:"detail"`
 }
 
-// TestDashboardCertsEndToEnd wires cmd.NewDashboardMux to a collect closure
+// TestUICertsEndToEnd wires cmd.NewUIMux to a collect closure
 // backed by fake clientsets (the same seam scan_e2e_test.go exercises
 // directly), serves it over a real HTTP server, and asserts the JSON the
 // frontend actually consumes matches the fixtures.
-func TestDashboardCertsEndToEnd(t *testing.T) {
+func TestUICertsEndToEnd(t *testing.T) {
 	healthyCert := generateCert(t, "healthy.example.com", time.Now().Add(90*24*time.Hour))
 	expiredCert := generateCert(t, "expired.example.com", time.Now().Add(-24*time.Hour))
 
@@ -55,7 +55,7 @@ func TestDashboardCertsEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ui.Handler: %v", err)
 	}
-	mux := cmd.NewDashboardMux(uiHandler, cmd.DashboardDeps{
+	mux := cmd.NewUIMux(uiHandler, cmd.UIDeps{
 		Collect:   collect,
 		Clusters:  cmd.NewClusterRegistry(),
 		Endpoints: cmd.NewEndpointRegistry(),
@@ -101,11 +101,11 @@ func TestDashboardCertsEndToEnd(t *testing.T) {
 	}
 }
 
-// TestDashboardEndpointsEndToEnd drives POST/GET /api/endpoints against a
-// real HTTP server, then wires a collect closure the same way runDashboard
+// TestUIEndpointsEndToEnd drives POST/GET /api/endpoints against a
+// real HTTP server, then wires a collect closure the same way runUI
 // does (cluster rows + probed endpoint rows, merged and sorted) to assert a
 // registered endpoint actually shows up in /api/certs.
-func TestDashboardEndpointsEndToEnd(t *testing.T) {
+func TestUIEndpointsEndToEnd(t *testing.T) {
 	notAfter := time.Now().Add(30 * 24 * time.Hour).Truncate(time.Second)
 	cert := generateCert(t, "127.0.0.1", notAfter)
 	addr := startTLSServer(t, cert)
@@ -132,7 +132,7 @@ func TestDashboardEndpointsEndToEnd(t *testing.T) {
 		}
 		return rows, nil
 	}
-	mux := cmd.NewDashboardMux(uiHandler, cmd.DashboardDeps{
+	mux := cmd.NewUIMux(uiHandler, cmd.UIDeps{
 		Collect:   collect,
 		Clusters:  cmd.NewClusterRegistry(),
 		Endpoints: endpoints,
@@ -201,10 +201,10 @@ func TestDashboardEndpointsEndToEnd(t *testing.T) {
 	}
 }
 
-// TestDashboardSettingsEndToEnd asserts a POST /api/settings change is
+// TestUISettingsEndToEnd asserts a POST /api/settings change is
 // actually picked up by the next collect — the whole point of Settings
 // being read live rather than captured once at startup.
-func TestDashboardSettingsEndToEnd(t *testing.T) {
+func TestUISettingsEndToEnd(t *testing.T) {
 	notAfter := time.Now().Add(10 * 24 * time.Hour).Truncate(time.Second) // 10 days out
 	cert := generateCert(t, "soon.example.com", notAfter)
 
@@ -222,7 +222,7 @@ func TestDashboardSettingsEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ui.Handler: %v", err)
 	}
-	mux := cmd.NewDashboardMux(uiHandler, cmd.DashboardDeps{
+	mux := cmd.NewUIMux(uiHandler, cmd.UIDeps{
 		Collect:   collect,
 		Clusters:  cmd.NewClusterRegistry(),
 		Endpoints: cmd.NewEndpointRegistry(),
@@ -282,10 +282,10 @@ func TestDashboardSettingsEndToEnd(t *testing.T) {
 	resp.Body.Close()
 }
 
-// TestDashboardAlertEndToEnd configures a webhook URL via /api/settings
+// TestUIAlertEndToEnd configures a webhook URL via /api/settings
 // pointing at a local httptest server, triggers POST /api/alert, and
 // asserts the fake webhook actually received the flagged row.
-func TestDashboardAlertEndToEnd(t *testing.T) {
+func TestUIAlertEndToEnd(t *testing.T) {
 	expiredCert := generateCert(t, "expired.example.com", time.Now().Add(-24*time.Hour))
 
 	dyn := newFakeDynamicClient()
@@ -307,7 +307,7 @@ func TestDashboardAlertEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ui.Handler: %v", err)
 	}
-	mux := cmd.NewDashboardMux(uiHandler, cmd.DashboardDeps{
+	mux := cmd.NewUIMux(uiHandler, cmd.UIDeps{
 		Collect:   collect,
 		Clusters:  cmd.NewClusterRegistry(),
 		Endpoints: cmd.NewEndpointRegistry(),
@@ -358,9 +358,9 @@ func TestDashboardAlertEndToEnd(t *testing.T) {
 	}
 }
 
-// TestDashboardHistoryEndToEnd records two snapshots with different fixture
+// TestUIHistoryEndToEnd records two snapshots with different fixture
 // state and asserts GET /api/history/diff reports the expected change.
-func TestDashboardHistoryEndToEnd(t *testing.T) {
+func TestUIHistoryEndToEnd(t *testing.T) {
 	dyn := newFakeDynamicClient()
 
 	firstCert := generateCert(t, "tracked.example.com", time.Now().Add(60*24*time.Hour))
@@ -374,7 +374,7 @@ func TestDashboardHistoryEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ui.Handler: %v", err)
 	}
-	mux := cmd.NewDashboardMux(uiHandler, cmd.DashboardDeps{
+	mux := cmd.NewUIMux(uiHandler, cmd.UIDeps{
 		Collect:   collect,
 		Clusters:  cmd.NewClusterRegistry(),
 		Endpoints: cmd.NewEndpointRegistry(),
@@ -439,17 +439,17 @@ func TestDashboardHistoryEndToEnd(t *testing.T) {
 	}
 }
 
-// TestDashboardCTValidationEndToEnd exercises POST /api/ct's input
+// TestUICTValidationEndToEnd exercises POST /api/ct's input
 // validation without hitting the real crt.sh (that path is already covered
 // by pkg/ctlog's httptest-based unit tests, and the ct CLI command was
 // smoke-tested live against crt.sh separately).
-func TestDashboardCTValidationEndToEnd(t *testing.T) {
+func TestUICTValidationEndToEnd(t *testing.T) {
 	uiHandler, err := ui.Handler()
 	if err != nil {
 		t.Fatalf("ui.Handler: %v", err)
 	}
 	noopCollect := func(ctx context.Context) ([]output.Row, error) { return nil, nil }
-	mux := cmd.NewDashboardMux(uiHandler, cmd.DashboardDeps{
+	mux := cmd.NewUIMux(uiHandler, cmd.UIDeps{
 		Collect:   noopCollect,
 		Clusters:  cmd.NewClusterRegistry(),
 		Endpoints: cmd.NewEndpointRegistry(),
@@ -482,17 +482,17 @@ func TestDashboardCTValidationEndToEnd(t *testing.T) {
 	resp.Body.Close()
 }
 
-// TestDashboardAddClusterRejectsBadKubeconfigEndToEnd asserts POST
+// TestUIAddClusterRejectsBadKubeconfigEndToEnd asserts POST
 // /api/clusters fails fast with 400 on an invalid uploaded kubeconfig,
 // without needing a fake clientset (the validation happens before any
 // client is used).
-func TestDashboardAddClusterRejectsBadKubeconfigEndToEnd(t *testing.T) {
+func TestUIAddClusterRejectsBadKubeconfigEndToEnd(t *testing.T) {
 	uiHandler, err := ui.Handler()
 	if err != nil {
 		t.Fatalf("ui.Handler: %v", err)
 	}
 	noopCollect := func(ctx context.Context) ([]output.Row, error) { return nil, nil }
-	mux := cmd.NewDashboardMux(uiHandler, cmd.DashboardDeps{
+	mux := cmd.NewUIMux(uiHandler, cmd.UIDeps{
 		Collect:   noopCollect,
 		Clusters:  cmd.NewClusterRegistry(),
 		Endpoints: cmd.NewEndpointRegistry(),

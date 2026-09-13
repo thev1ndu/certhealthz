@@ -1,19 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Badge,
-  Button,
-  Checkbox,
-  DropdownMenu,
-  Input,
-  InputGroup,
-  LayerCard,
-  Popover,
-  Text,
-  Toolbar,
-  Tooltip,
-  TooltipProvider,
-} from "@cloudflare/kumo";
-import {
+  CertificateIcon,
   ClockCounterClockwiseIcon,
   CloudArrowUpIcon,
   DownloadSimpleIcon,
@@ -26,8 +13,62 @@ import {
   ShieldCheckIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import CertTable, { STATUS_BADGE, STATUS_LABEL } from "./components/CertTable";
-import { certs as mockCerts } from "./data/certs";
+import CertTable, { STATUS_LABEL } from "@/components/CertTable";
+import StatusBadge from "@/components/StatusBadge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+} from "@/components/ui/sidebar";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 function matchesSearch(row, query) {
   if (!query) return true;
@@ -49,17 +90,65 @@ function matchesFilters(row, statusFilter, clusterFilter) {
 
 const SUMMARY_ORDER = ["expired", "drift", "expiring", "ok", "error"];
 
+const TABS = [
+  { id: "certificates", label: "Certificates", icon: CertificateIcon, index: "01" },
+  { id: "history", label: "History", icon: ClockCounterClockwiseIcon, index: "02" },
+  { id: "ct", label: "CT Check", icon: ShieldCheckIcon, index: "03" },
+  { id: "settings", label: "Settings", icon: GearSixIcon, index: "04" },
+];
+
+const CT_SINCE_OPTIONS = [
+  { value: "1h", label: "Last hour" },
+  { value: "24h", label: "Last 24 hours" },
+  { value: "168h", label: "Last 7 days" },
+  { value: "720h", label: "Last 30 days" },
+];
+
 function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   return `${(bytes / 1024).toFixed(1)} KB`;
 }
 
+function PageHeading({ title, description }) {
+  return (
+    <div className="mb-6 border-b border-border pb-5">
+      <div className="mb-1.5 font-mono text-xs tracking-widest text-primary uppercase">
+        CertHealthz
+      </div>
+      <h1 className="font-heading text-2xl font-medium tracking-tight">{title}</h1>
+      {description && (
+        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{description}</p>
+      )}
+    </div>
+  );
+}
+
+function NotConnected() {
+  return (
+    <Empty className="border border-dashed border-border">
+      <EmptyMedia variant="icon">
+        <PlugsConnectedIcon size={20} />
+      </EmptyMedia>
+      <EmptyTitle>Not connected to a live scan</EmptyTitle>
+      <EmptyDescription>
+        Run this and open this page from there:
+        <br />
+        <span className="mt-1 inline-block rounded-md bg-muted px-2 py-1 font-mono text-xs text-foreground">
+          certhealthz ui
+        </span>
+      </EmptyDescription>
+    </Empty>
+  );
+}
+
 export default function App() {
+  const [activeTab, setActiveTab] = useState("certificates");
   const [query, setQuery] = useState("");
-  const [certs, setCerts] = useState(mockCerts);
+  const [certs, setCerts] = useState([]);
   const [isLive, setIsLive] = useState(false);
   const [statusFilter, setStatusFilter] = useState(() => new Set());
   const [clusterFilter, setClusterFilter] = useState(() => new Set());
+  const [serverClusters, setServerClusters] = useState(null);
 
   function reloadCerts() {
     return fetch("/api/certs")
@@ -70,11 +159,24 @@ export default function App() {
       });
   }
 
+  function reloadClusters() {
+    return fetch("/api/clusters")
+      .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
+      .then((data) => setServerClusters(data))
+      .catch(() => {
+        // filter dropdown just falls back to clusters seen in cert rows
+      });
+  }
+
   useEffect(() => {
     reloadCerts().catch(() => {
-      // no live backend (e.g. `npm run dev` standalone) — keep mock data
+      // no live backend (e.g. `npm run dev` standalone) — stays empty
     });
   }, []);
+
+  useEffect(() => {
+    if (isLive) reloadClusters();
+  }, [isLive]);
 
   const [addClusterOpen, setAddClusterOpen] = useState(false);
   const [addClusterFile, setAddClusterFile] = useState(null);
@@ -100,7 +202,7 @@ export default function App() {
     fetch("/api/clusters", { method: "POST", body })
       .then(async (res) => {
         if (!res.ok) throw new Error(await res.text());
-        return reloadCerts();
+        return Promise.all([reloadCerts(), reloadClusters()]);
       })
       .then(() => {
         setAddClusterOpen(false);
@@ -145,7 +247,6 @@ export default function App() {
       .finally(() => setAddEndpointBusy(false));
   }
 
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsForm, setSettingsForm] = useState({
     warnDays: 14,
     includeSecrets: true,
@@ -199,7 +300,6 @@ export default function App() {
       .finally(() => setAlertBusy(false));
   }
 
-  const [historyOpen, setHistoryOpen] = useState(false);
   const [historyDiff, setHistoryDiff] = useState(null);
   const [historyError, setHistoryError] = useState("");
   const [historyBusy, setHistoryBusy] = useState(false);
@@ -228,7 +328,11 @@ export default function App() {
       });
   }
 
-  const [ctOpen, setCtOpen] = useState(false);
+  useEffect(() => {
+    if (isLive && activeTab === "history") fetchHistoryDiff();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLive, activeTab]);
+
   const [ctDomains, setCtDomains] = useState("");
   const [ctSince, setCtSince] = useState("24h");
   const [ctResults, setCtResults] = useState(null);
@@ -276,11 +380,12 @@ export default function App() {
     return SUMMARY_ORDER.filter((s) => counts[s]).map((s) => [s, counts[s]]);
   }, [certs]);
 
-  const [serverClusters, setServerClusters] = useState(null);
-
   const clusters = useMemo(() => {
-    if (serverClusters) return serverClusters;
-    return [...new Set(certs.map((r) => r.cluster).filter((c) => c !== "-"))].sort();
+    // Union, not override: /api/clusters only knows explicit --kubeconfig
+    // entries and uploads, not the implicit "default" cluster a bare scan
+    // falls back to — that one only shows up in the cert rows themselves.
+    const fromRows = certs.map((r) => r.cluster).filter((c) => c !== "-");
+    return [...new Set([...(serverClusters ?? []), ...fromRows])].sort();
   }, [certs, serverClusters]);
 
   const clusterCount = clusters.length;
@@ -324,765 +429,622 @@ export default function App() {
 
   return (
     <TooltipProvider>
-      <div className="shell mx-auto w-full px-6 py-8">
-        <header className="mb-3 flex flex-wrap items-baseline justify-between gap-3">
-          <div className="flex flex-wrap items-baseline gap-3">
-            <Text variant="heading" size="lg" as="h1">
+      <SidebarProvider defaultOpen={false}>
+        <Sidebar collapsible="icon" className="border-r border-sidebar-border">
+          <SidebarHeader className="px-3 py-4">
+            <span className="font-heading text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
               CertHealthz
-            </Text>
-            <Text variant="secondary" size="xs">
-              Live TLS certificate health across clusters
-            </Text>
-          </div>
-        </header>
-
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <Toolbar className="flex-1">
-            <Toolbar.InputGroup
-              aria-label="Search certificates"
-              className="flex-1"
-            >
-              <InputGroup.Addon>
-                <MagnifyingGlassIcon />
-              </InputGroup.Addon>
-              <InputGroup.Input
-                placeholder="Search certificates"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </Toolbar.InputGroup>
-            <DropdownMenu>
-              <DropdownMenu.Trigger
-                render={
-                  <Toolbar.Button icon={FunnelIcon}>
-                    Filters
-                    {activeFilterCount > 0 && (
-                      <Badge variant="primary">{activeFilterCount}</Badge>
-                    )}
-                  </Toolbar.Button>
+            </span>
+          </SidebarHeader>
+          <SidebarContent>
+            <SidebarGroup>
+              <SidebarMenu>
+                {TABS.map((tab) => (
+                  <SidebarMenuItem key={tab.id}>
+                    <SidebarMenuButton
+                      isActive={activeTab === tab.id}
+                      tooltip={tab.label}
+                      onClick={() => setActiveTab(tab.id)}
+                    >
+                      <tab.icon size={16} />
+                      <span>{tab.label}</span>
+                      <span className="ml-auto font-mono text-[10px] text-muted-foreground group-data-[collapsible=icon]:hidden">
+                        {tab.index}
+                      </span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroup>
+          </SidebarContent>
+          <SidebarFooter className="px-3 pb-4">
+            <div className="flex items-center gap-2 px-2.5 py-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
+              <span
+                className={
+                  "size-1.5 shrink-0 rounded-full " +
+                  (isLive ? "bg-status-ok" : "bg-status-neutral")
                 }
               />
-              <DropdownMenu.Content>
-                <DropdownMenu.Group>
-                  <DropdownMenu.Label>Status</DropdownMenu.Label>
-                  {SUMMARY_ORDER.map((status) => (
-                    <DropdownMenu.CheckboxItem
-                      key={status}
-                      checked={statusFilter.has(status)}
-                      onCheckedChange={() => toggleStatusFilter(status)}
-                      closeOnClick={false}
-                    >
-                      {STATUS_LABEL[status]}
-                    </DropdownMenu.CheckboxItem>
-                  ))}
-                </DropdownMenu.Group>
-                <DropdownMenu.Separator />
-                <DropdownMenu.Group>
-                  <DropdownMenu.Label>Cluster</DropdownMenu.Label>
-                  {clusters.map((cluster) => (
-                    <DropdownMenu.CheckboxItem
-                      key={cluster}
-                      checked={clusterFilter.has(cluster)}
-                      onCheckedChange={() => toggleClusterFilter(cluster)}
-                      closeOnClick={false}
-                    >
-                      {cluster}
-                    </DropdownMenu.CheckboxItem>
-                  ))}
-                </DropdownMenu.Group>
-                {activeFilterCount > 0 && (
-                  <>
-                    <DropdownMenu.Separator />
-                    <DropdownMenu.Item onClick={clearFilters}>
-                      Clear filters
-                    </DropdownMenu.Item>
-                  </>
-                )}
-              </DropdownMenu.Content>
-            </DropdownMenu>
-            {isLive ? (
-              <Popover
-                open={settingsOpen}
-                onOpenChange={(open) => {
-                  setSettingsOpen(open);
-                  if (open) {
-                    setAlertResult(null);
-                    setSettingsError("");
-                  }
-                }}
-              >
-                <Popover.Trigger
-                  render={(p) => (
-                    <Toolbar.Button
-                      {...p}
-                      icon={GearSixIcon}
-                      aria-label="Settings"
-                    />
-                  )}
-                />
-                <Popover.Content className="w-96 p-6">
-                  <div className="mb-4 flex items-start justify-between gap-4">
-                    <Popover.Title className="text-lg font-semibold">
-                      Settings
-                    </Popover.Title>
-                    <Popover.Close
-                      aria-label="Close"
-                      render={(p) => (
-                        <Button
-                          {...p}
-                          variant="secondary"
-                          shape="square"
-                          icon={<XIcon />}
-                          aria-label="Close"
-                        />
-                      )}
-                    />
-                  </div>
-                  <Popover.Description className="mb-4 text-kumo-subtle">
-                    Change scan thresholds and alerting without restarting
-                    the server.
-                  </Popover.Description>
-
-                  <div className="flex flex-col gap-3">
-                    <label className="flex flex-col gap-1">
-                      <Text as="span" size="sm">
-                        Warn days
-                      </Text>
-                      <Input
-                        type="number"
-                        min={1}
-                        value={settingsForm.warnDays}
-                        onChange={(e) =>
-                          setSettingsForm((prev) => ({
-                            ...prev,
-                            warnDays: Number(e.target.value),
-                          }))
-                        }
-                      />
-                    </label>
-
-                    <label className="flex items-center gap-2">
-                      <Checkbox
-                        checked={settingsForm.includeSecrets}
-                        onCheckedChange={(checked) =>
-                          setSettingsForm((prev) => ({
-                            ...prev,
-                            includeSecrets: checked,
-                          }))
-                        }
-                      />
-                      <Text as="span" size="sm">
-                        Scan raw Secrets (drift detection, Ingress
-                        cross-referencing)
-                      </Text>
-                    </label>
-
-                    <label className="flex flex-col gap-1">
-                      <Text as="span" size="sm">
-                        Webhook URL
-                      </Text>
-                      <Input
-                        placeholder="https://hooks.example.com/certhealthz"
-                        value={settingsForm.webhookURL}
-                        onChange={(e) =>
-                          setSettingsForm((prev) => ({
-                            ...prev,
-                            webhookURL: e.target.value,
-                          }))
-                        }
-                      />
-                    </label>
-                  </div>
-
-                  {settingsError && (
-                    <Text variant="error" size="sm" className="mt-2 block">
-                      {settingsError}
-                    </Text>
-                  )}
-
-                  <div className="mt-4 flex items-center justify-between gap-2">
-                    <Button
-                      variant="secondary"
-                      onClick={sendTestAlert}
-                      disabled={alertBusy || !settingsForm.webhookURL?.trim()}
-                    >
-                      {alertBusy ? "Sending…" : "Send test alert"}
-                    </Button>
-                    <div className="flex gap-2">
-                      <Popover.Close
-                        render={(p) => (
-                          <Button {...p} variant="secondary">
-                            Close
-                          </Button>
-                        )}
-                      />
-                      <Button
-                        variant="primary"
-                        onClick={submitSettings}
-                        disabled={settingsBusy}
-                      >
-                        {settingsBusy ? "Saving…" : "Save"}
-                      </Button>
-                    </div>
-                  </div>
-
-                  {alertResult && (
-                    <Text
-                      as="p"
-                      size="sm"
-                      variant={alertResult.error ? "error" : "secondary"}
-                      className="mt-2"
-                    >
-                      {alertResult.error
-                        ? alertResult.error
-                        : alertResult.sent
-                          ? `Sent — ${alertResult.flagged} flagged certificate(s).`
-                          : "Nothing to send — 0 flagged certificates."}
-                    </Text>
-                  )}
-                </Popover.Content>
-              </Popover>
-            ) : (
-              <Tooltip content="No backend wired up in this preview">
-                <Toolbar.Button
-                  icon={GearSixIcon}
-                  aria-label="Display options"
-                  disabled
-                />
-              </Tooltip>
-            )}
-            <Toolbar.Button
-              icon={DownloadSimpleIcon}
-              onClick={exportJson}
-            >
-              Export
-            </Toolbar.Button>
-          </Toolbar>
-          {isLive ? (
-            <Popover
-              open={addClusterOpen}
-              onOpenChange={(open) => {
-                setAddClusterOpen(open);
-                if (!open) resetAddCluster();
-              }}
-            >
-              <Popover.Trigger
-                render={(p) => (
-                  <Button {...p} variant="primary" icon={PlusIcon}>
-                    Add cluster
-                  </Button>
-                )}
-              />
-              <Popover.Content className="w-96 p-6">
-                <div className="mb-4 flex items-start justify-between gap-4">
-                  <Popover.Title className="text-lg font-semibold">
-                    Add cluster
-                  </Popover.Title>
-                  <Popover.Close
-                    aria-label="Close"
-                    render={(p) => (
-                      <Button
-                        {...p}
-                        variant="secondary"
-                        shape="square"
-                        icon={<XIcon />}
-                        aria-label="Close"
-                      />
-                    )}
-                  />
-                </div>
-                <Popover.Description className="mb-4 text-kumo-subtle">
-                  Upload a kubeconfig file for the cluster you want to
-                  monitor. It's validated before being added.
-                </Popover.Description>
-
-                {addClusterFile ? (
-                  <div className="flex items-center justify-between gap-3 rounded-lg border border-kumo-line bg-kumo-base px-3 py-2">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <Text as="span" size="sm" className="truncate">
-                        {addClusterFile.name}
-                      </Text>
-                      <Text as="span" variant="secondary" size="xs">
-                        {formatFileSize(addClusterFile.size)}
-                      </Text>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      shape="square"
-                      size="sm"
-                      icon={<FileXIcon />}
-                      aria-label="Remove file"
-                      onClick={() => {
-                        setAddClusterFile(null);
-                        setAddClusterError("");
-                      }}
-                    />
-                  </div>
-                ) : (
-                  <label
-                    className={`flex cursor-pointer flex-col items-center gap-2 rounded-lg border border-dashed px-4 py-8 text-center transition-colors ${
-                      addClusterDragOver
-                        ? "border-kumo-accent bg-kumo-elevated"
-                        : "border-kumo-line"
-                    }`}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      setAddClusterDragOver(true);
-                    }}
-                    onDragLeave={() => setAddClusterDragOver(false)}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      setAddClusterDragOver(false);
-                      const file = e.dataTransfer.files?.[0];
-                      if (file) {
-                        setAddClusterFile(file);
-                        setAddClusterError("");
-                      }
-                    }}
-                  >
-                    <CloudArrowUpIcon
-                      size={28}
-                      className="text-kumo-subtle"
-                    />
-                    <Text as="span" size="sm">
-                      Drag and drop your kubeconfig file here, or{" "}
-                      <Text as="span" variant="mono" size="sm">
-                        click to browse
-                      </Text>
-                    </Text>
-                    <input
-                      type="file"
-                      accept=".yaml,.yml,text/yaml,text/plain,application/x-yaml"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          setAddClusterFile(file);
-                          setAddClusterError("");
-                        }
-                        e.target.value = "";
-                      }}
-                    />
-                  </label>
-                )}
-                {addClusterError && (
-                  <Text variant="error" size="sm" className="mt-2 block">
-                    {addClusterError}
-                  </Text>
-                )}
-
-                <div className="mt-4 flex justify-end gap-2">
-                  <Popover.Close
-                    render={(p) => (
-                      <Button {...p} variant="secondary">
-                        Cancel
-                      </Button>
-                    )}
-                  />
-                  <Button
-                    variant="primary"
-                    onClick={submitAddCluster}
-                    disabled={addClusterBusy || !addClusterFile}
-                  >
-                    {addClusterBusy ? "Checking…" : "Add"}
-                  </Button>
-                </div>
-              </Popover.Content>
-            </Popover>
-          ) : (
-            <Tooltip content="No backend wired up in this preview">
-              <Button variant="primary" icon={PlusIcon} disabled>
-                Add cluster
-              </Button>
-            </Tooltip>
-          )}
-          {isLive ? (
-            <Popover
-              open={addEndpointOpen}
-              onOpenChange={(open) => {
-                setAddEndpointOpen(open);
-                if (!open) resetAddEndpoint();
-              }}
-            >
-              <Popover.Trigger
-                render={(p) => (
-                  <Button {...p} variant="secondary" icon={PlugsConnectedIcon}>
-                    Add endpoint
-                  </Button>
-                )}
-              />
-              <Popover.Content className="w-96 p-6">
-                <div className="mb-4 flex items-start justify-between gap-4">
-                  <Popover.Title className="text-lg font-semibold">
-                    Add endpoint
-                  </Popover.Title>
-                  <Popover.Close
-                    aria-label="Close"
-                    render={(p) => (
-                      <Button
-                        {...p}
-                        variant="secondary"
-                        shape="square"
-                        icon={<XIcon />}
-                        aria-label="Close"
-                      />
-                    )}
-                  />
-                </div>
-                <Popover.Description className="mb-4 text-kumo-subtle">
-                  Probe a live TLS endpoint on every scan, alongside your
-                  clusters — a vendor API, a load balancer, anything
-                  cert-manager doesn't manage.
-                </Popover.Description>
-
-                <Input
-                  placeholder="example.com or example.com:8443"
-                  value={addEndpointValue}
-                  onChange={(e) => {
-                    setAddEndpointValue(e.target.value);
-                    setAddEndpointError("");
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") submitAddEndpoint();
-                  }}
-                />
-                {addEndpointError && (
-                  <Text variant="error" size="sm" className="mt-2 block">
-                    {addEndpointError}
-                  </Text>
-                )}
-
-                <div className="mt-4 flex justify-end gap-2">
-                  <Popover.Close
-                    render={(p) => (
-                      <Button {...p} variant="secondary">
-                        Cancel
-                      </Button>
-                    )}
-                  />
-                  <Button
-                    variant="primary"
-                    onClick={submitAddEndpoint}
-                    disabled={addEndpointBusy || !addEndpointValue.trim()}
-                  >
-                    {addEndpointBusy ? "Adding…" : "Add"}
-                  </Button>
-                </div>
-              </Popover.Content>
-            </Popover>
-          ) : (
-            <Tooltip content="No backend wired up in this preview">
-              <Button variant="secondary" icon={PlugsConnectedIcon} disabled>
-                Add endpoint
-              </Button>
-            </Tooltip>
-          )}
-          {isLive ? (
-            <Popover
-              open={historyOpen}
-              onOpenChange={(open) => {
-                setHistoryOpen(open);
-                if (open) fetchHistoryDiff();
-              }}
-            >
-              <Popover.Trigger
-                render={(p) => (
-                  <Button
-                    {...p}
-                    variant="secondary"
-                    icon={ClockCounterClockwiseIcon}
-                  >
-                    History
-                  </Button>
-                )}
-              />
-              <Popover.Content className="w-[28rem] p-6">
-                <div className="mb-4 flex items-start justify-between gap-4">
-                  <Popover.Title className="text-lg font-semibold">
-                    History
-                  </Popover.Title>
-                  <Popover.Close
-                    aria-label="Close"
-                    render={(p) => (
-                      <Button
-                        {...p}
-                        variant="secondary"
-                        shape="square"
-                        icon={<XIcon />}
-                        aria-label="Close"
-                      />
-                    )}
-                  />
-                </div>
-                <Popover.Description className="mb-4 text-kumo-subtle">
-                  Record a snapshot of the current scan, and see what
-                  changed since the last one.
-                </Popover.Description>
-
-                <Button
-                  variant="primary"
-                  onClick={recordSnapshot}
-                  disabled={historyBusy}
-                >
-                  {historyBusy ? "Working…" : "Record snapshot"}
-                </Button>
-
-                {historyError && (
-                  <Text variant="error" size="sm" className="mt-2 block">
-                    {historyError}
-                  </Text>
-                )}
-
-                {historyDiff && (
-                  <div className="mt-4">
-                    {historyDiff.message && (
-                      <Text
-                        as="p"
-                        variant="secondary"
-                        size="sm"
-                        className="mb-2"
-                      >
-                        {historyDiff.message}
-                      </Text>
-                    )}
-                    {historyDiff.changes?.length > 0 && (
-                      <div className="max-h-64 overflow-y-auto rounded-lg border border-kumo-line">
-                        <table className="w-full text-left text-xs">
-                          <thead>
-                            <tr className="border-b border-kumo-line">
-                              <th className="px-2 py-1.5 font-medium">
-                                Change
-                              </th>
-                              <th className="px-2 py-1.5 font-medium">
-                                Name
-                              </th>
-                              <th className="px-2 py-1.5 font-medium">
-                                From
-                              </th>
-                              <th className="px-2 py-1.5 font-medium">To</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {historyDiff.changes.map((c, i) => (
-                              <tr
-                                key={i}
-                                className="border-b border-kumo-line last:border-0"
-                              >
-                                <td className="px-2 py-1.5">{c.kind}</td>
-                                <td className="px-2 py-1.5 truncate">
-                                  {c.name}
-                                </td>
-                                <td className="px-2 py-1.5">
-                                  {c.fromState || "—"}
-                                </td>
-                                <td className="px-2 py-1.5">
-                                  {c.toState || "—"}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </Popover.Content>
-            </Popover>
-          ) : (
-            <Tooltip content="No backend wired up in this preview">
-              <Button variant="secondary" icon={ClockCounterClockwiseIcon} disabled>
-                History
-              </Button>
-            </Tooltip>
-          )}
-          {isLive ? (
-            <Popover
-              open={ctOpen}
-              onOpenChange={(open) => {
-                setCtOpen(open);
-                if (open) {
-                  setCtError("");
-                  setCtResults(null);
-                }
-              }}
-            >
-              <Popover.Trigger
-                render={(p) => (
-                  <Button {...p} variant="secondary" icon={ShieldCheckIcon}>
-                    Check CT logs
-                  </Button>
-                )}
-              />
-              <Popover.Content className="w-[28rem] p-6">
-                <div className="mb-4 flex items-start justify-between gap-4">
-                  <Popover.Title className="text-lg font-semibold">
-                    Check Certificate Transparency logs
-                  </Popover.Title>
-                  <Popover.Close
-                    aria-label="Close"
-                    render={(p) => (
-                      <Button
-                        {...p}
-                        variant="secondary"
-                        shape="square"
-                        icon={<XIcon />}
-                        aria-label="Close"
-                      />
-                    )}
-                  />
-                </div>
-                <Popover.Description className="mb-4 text-kumo-subtle">
-                  Find certs recently logged for your domains that none of
-                  your configured clusters' Secrets cover — possible
-                  shadow/rogue issuance.
-                </Popover.Description>
-
-                <div className="flex flex-col gap-3">
-                  <label className="flex flex-col gap-1">
-                    <Text as="span" size="sm">
-                      Domains (comma or newline separated)
-                    </Text>
-                    <textarea
-                      className="min-h-16 rounded-lg border border-kumo-line bg-kumo-base p-2 text-sm"
-                      placeholder="example.com, api.example.com"
-                      value={ctDomains}
-                      onChange={(e) => setCtDomains(e.target.value)}
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1">
-                    <Text as="span" size="sm">
-                      Since
-                    </Text>
-                    <select
-                      className="rounded-lg border border-kumo-line bg-kumo-base p-2 text-sm"
-                      value={ctSince}
-                      onChange={(e) => setCtSince(e.target.value)}
-                    >
-                      <option value="1h">Last hour</option>
-                      <option value="24h">Last 24 hours</option>
-                      <option value="168h">Last 7 days</option>
-                      <option value="720h">Last 30 days</option>
-                    </select>
-                  </label>
-                </div>
-
-                {ctError && (
-                  <Text variant="error" size="sm" className="mt-2 block">
-                    {ctError}
-                  </Text>
-                )}
-
-                <div className="mt-4 flex justify-end gap-2">
-                  <Popover.Close
-                    render={(p) => (
-                      <Button {...p} variant="secondary">
-                        Close
-                      </Button>
-                    )}
-                  />
-                  <Button
-                    variant="primary"
-                    onClick={submitCTCheck}
-                    disabled={ctBusy || !ctDomains.trim()}
-                  >
-                    {ctBusy ? "Checking…" : "Check"}
-                  </Button>
-                </div>
-
-                {ctResults && (
-                  <div className="mt-4">
-                    {ctResults.length === 0 ? (
-                      <Text as="p" variant="secondary" size="sm">
-                        No certs logged in that window.
-                      </Text>
-                    ) : (
-                      <div className="max-h-64 overflow-y-auto rounded-lg border border-kumo-line">
-                        <table className="w-full text-left text-xs">
-                          <thead>
-                            <tr className="border-b border-kumo-line">
-                              <th className="px-2 py-1.5 font-medium">
-                                Name
-                              </th>
-                              <th className="px-2 py-1.5 font-medium">
-                                Status
-                              </th>
-                              <th className="px-2 py-1.5 font-medium">
-                                Detail
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {ctResults.map((r) => (
-                              <tr
-                                key={r.id}
-                                className="border-b border-kumo-line last:border-0"
-                              >
-                                <td className="px-2 py-1.5 truncate">
-                                  {r.name}
-                                </td>
-                                <td className="px-2 py-1.5">
-                                  <Badge
-                                    variant={STATUS_BADGE[r.status]}
-                                    appearance="dot"
-                                  >
-                                    {STATUS_LABEL[r.status]}
-                                  </Badge>
-                                </td>
-                                <td
-                                  className="max-w-56 truncate px-2 py-1.5"
-                                  title={r.detail}
-                                >
-                                  {r.detail}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </Popover.Content>
-            </Popover>
-          ) : (
-            <Tooltip content="No backend wired up in this preview">
-              <Button variant="secondary" icon={ShieldCheckIcon} disabled>
-                Check CT logs
-              </Button>
-            </Tooltip>
-          )}
-        </div>
-
-        <LayerCard className="p-0">
-          <LayerCard.Secondary className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
-            <Text as="span" variant="secondary" size="sm">
-              {certs.length} certificates tracked across {clusterCount} clusters
-              and live endpoints
-            </Text>
-            <div className="flex flex-wrap items-center gap-2">
-              {summary.map(([status, count]) => (
-                <Badge
-                  key={status}
-                  variant={STATUS_BADGE[status]}
-                  appearance="dot"
-                >
-                  {count} {STATUS_LABEL[status].toLowerCase()}
-                </Badge>
-              ))}
+              <span className="font-mono text-[11px] text-muted-foreground group-data-[collapsible=icon]:hidden">
+                {isLive ? "Connected to live scan" : "Not connected"}
+              </span>
             </div>
-          </LayerCard.Secondary>
+          </SidebarFooter>
+        </Sidebar>
 
-          <CertTable rows={rows} />
+        <SidebarInset className="relative">
+          <main className="arch-frame relative mx-auto min-h-svh w-full max-w-[1344px] px-6 py-12 md:px-12">
+            {activeTab === "certificates" && (
+              <div>
+                <PageHeading
+                  title="Certificates"
+                  description="Live TLS certificate health across clusters and endpoints"
+                />
 
-          <LayerCard.Secondary className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
-            <Text as="span" variant="secondary" size="sm">
-              Showing {rows.length === 0 ? 0 : 1}–{rows.length} of{" "}
-              {certs.length}
-            </Text>
-          </LayerCard.Secondary>
-        </LayerCard>
+                {!isLive && (
+                  <div className="mb-4">
+                    <NotConnected />
+                  </div>
+                )}
 
-      </div>
+                <div className="mb-4 flex flex-wrap items-center gap-2">
+                  <div className="relative min-w-[220px] flex-1">
+                    <MagnifyingGlassIcon
+                      size={15}
+                      className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted-foreground"
+                    />
+                    <Input
+                      placeholder="Search certificates"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      className="pl-8"
+                    />
+                  </div>
+
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button variant="outline">
+                          <FunnelIcon data-icon="inline-start" />
+                          Filters
+                          {activeFilterCount > 0 && (
+                            <span className="ml-1 flex size-4 items-center justify-center rounded-full bg-primary font-mono text-[10px] text-primary-foreground">
+                              {activeFilterCount}
+                            </span>
+                          )}
+                        </Button>
+                      }
+                    />
+                    <DropdownMenuContent>
+                      <DropdownMenuGroup>
+                        <DropdownMenuLabel>Status</DropdownMenuLabel>
+                        {SUMMARY_ORDER.map((status) => (
+                          <DropdownMenuCheckboxItem
+                            key={status}
+                            checked={statusFilter.has(status)}
+                            onCheckedChange={() => toggleStatusFilter(status)}
+                            closeOnClick={false}
+                          >
+                            {STATUS_LABEL[status]}
+                          </DropdownMenuCheckboxItem>
+                        ))}
+                      </DropdownMenuGroup>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuGroup>
+                        <DropdownMenuLabel>Cluster</DropdownMenuLabel>
+                        {clusters.map((cluster) => (
+                          <DropdownMenuCheckboxItem
+                            key={cluster}
+                            checked={clusterFilter.has(cluster)}
+                            onCheckedChange={() => toggleClusterFilter(cluster)}
+                            closeOnClick={false}
+                          >
+                            {cluster}
+                          </DropdownMenuCheckboxItem>
+                        ))}
+                      </DropdownMenuGroup>
+                      {activeFilterCount > 0 && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={clearFilters}>
+                            Clear filters
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+
+                  <Button variant="outline" onClick={exportJson}>
+                    <DownloadSimpleIcon data-icon="inline-start" />
+                    Export
+                  </Button>
+
+                  <div className="ml-auto flex items-center gap-2">
+                    {isLive ? (
+                      <Popover
+                        open={addClusterOpen}
+                        onOpenChange={(open) => {
+                          setAddClusterOpen(open);
+                          if (!open) resetAddCluster();
+                        }}
+                      >
+                        <PopoverTrigger
+                          render={
+                            <Button>
+                              <PlusIcon data-icon="inline-start" />
+                              Add cluster
+                            </Button>
+                          }
+                        />
+                        <PopoverContent className="w-96">
+                          <div className="mb-1 flex items-start justify-between gap-4">
+                            <PopoverTitle>Add cluster</PopoverTitle>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label="Close"
+                              onClick={() => setAddClusterOpen(false)}
+                            >
+                              <XIcon />
+                            </Button>
+                          </div>
+                          <PopoverDescription className="mb-4">
+                            Upload a kubeconfig file for the cluster you want to
+                            monitor. It's validated before being added.
+                          </PopoverDescription>
+
+                          {addClusterFile ? (
+                            <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <span className="truncate text-sm">
+                                  {addClusterFile.name}
+                                </span>
+                                <span className="font-mono text-xs text-muted-foreground">
+                                  {formatFileSize(addClusterFile.size)}
+                                </span>
+                              </div>
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                aria-label="Remove file"
+                                onClick={() => {
+                                  setAddClusterFile(null);
+                                  setAddClusterError("");
+                                }}
+                              >
+                                <FileXIcon />
+                              </Button>
+                            </div>
+                          ) : (
+                            <label
+                              className={
+                                "flex cursor-pointer flex-col items-center gap-2 rounded-md border border-dashed px-4 py-8 text-center transition-colors " +
+                                (addClusterDragOver
+                                  ? "border-primary bg-primary/5"
+                                  : "border-border")
+                              }
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                setAddClusterDragOver(true);
+                              }}
+                              onDragLeave={() => setAddClusterDragOver(false)}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                setAddClusterDragOver(false);
+                                const file = e.dataTransfer.files?.[0];
+                                if (file) {
+                                  setAddClusterFile(file);
+                                  setAddClusterError("");
+                                }
+                              }}
+                            >
+                              <CloudArrowUpIcon size={26} className="text-muted-foreground" />
+                              <span className="text-sm">
+                                Drag and drop your kubeconfig file here, or{" "}
+                                <span className="font-mono text-xs">click to browse</span>
+                              </span>
+                              <input
+                                type="file"
+                                accept=".yaml,.yml,text/yaml,text/plain,application/x-yaml"
+                                className="hidden"
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) {
+                                    setAddClusterFile(file);
+                                    setAddClusterError("");
+                                  }
+                                  e.target.value = "";
+                                }}
+                              />
+                            </label>
+                          )}
+                          {addClusterError && (
+                            <p className="mt-2 text-sm text-destructive">{addClusterError}</p>
+                          )}
+
+                          <div className="mt-4 flex justify-end gap-2">
+                            <Button variant="secondary" onClick={() => setAddClusterOpen(false)}>
+                              Cancel
+                            </Button>
+                            <Button
+                              onClick={submitAddCluster}
+                              disabled={addClusterBusy || !addClusterFile}
+                            >
+                              {addClusterBusy ? "Checking…" : "Add"}
+                            </Button>
+                          </div>
+                        </PopoverContent>
+                      </Popover>
+                    ) : (
+                      <Tooltip>
+                        <TooltipTrigger render={<span />}>
+                          <Button disabled>
+                            <PlusIcon data-icon="inline-start" />
+                            Add cluster
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>No backend wired up in this preview</TooltipContent>
+                      </Tooltip>
+                    )}
+
+                    {isLive ? (
+                      <Popover
+                        open={addEndpointOpen}
+                        onOpenChange={(open) => {
+                          setAddEndpointOpen(open);
+                          if (!open) resetAddEndpoint();
+                        }}
+                      >
+                        <PopoverTrigger
+                          render={
+                            <Button variant="secondary">
+                              <PlugsConnectedIcon data-icon="inline-start" />
+                              Add endpoint
+                            </Button>
+                          }
+                        />
+                        <PopoverContent className="w-96">
+                          <div className="mb-1 flex items-start justify-between gap-4">
+                            <PopoverTitle>Add endpoint</PopoverTitle>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label="Close"
+                              onClick={() => setAddEndpointOpen(false)}
+                            >
+                              <XIcon />
+                            </Button>
+                          </div>
+                          <PopoverDescription className="mb-4">
+                            Probe a live TLS endpoint on every scan, alongside your
+                            clusters — a vendor API, a load balancer, anything
+                            cert-manager doesn't manage.
+                          </PopoverDescription>
+
+                          <Input
+                            placeholder="example.com or example.com:8443"
+                            value={addEndpointValue}
+                            onChange={(e) => {
+                              setAddEndpointValue(e.target.value);
+                              setAddEndpointError("");
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") submitAddEndpoint();
+                            }}
+                          />
+                          {addEndpointError && (
+                            <p className="mt-2 text-sm text-destructive">{addEndpointError}</p>
+                          )}
+
+                          <div className="mt-4 flex justify-end gap-2">
+                            <Button variant="secondary" onClick={() => setAddEndpointOpen(false)}>
+                              Cancel
+                            </Button>
+                            <Button
+                              onClick={submitAddEndpoint}
+                              disabled={addEndpointBusy || !addEndpointValue.trim()}
+                            >
+                              {addEndpointBusy ? "Adding…" : "Add"}
+                            </Button>
+                          </div>
+                        </PopoverContent>
+                      </Popover>
+                    ) : (
+                      <Tooltip>
+                        <TooltipTrigger render={<span />}>
+                          <Button variant="secondary" disabled>
+                            <PlugsConnectedIcon data-icon="inline-start" />
+                            Add endpoint
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>No backend wired up in this preview</TooltipContent>
+                      </Tooltip>
+                    )}
+                  </div>
+                </div>
+
+                <Card size="sm" className="gap-0 p-0">
+                  <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
+                    <span className="font-mono text-xs text-muted-foreground">
+                      {certs.length} certificates tracked across {clusterCount}{" "}
+                      clusters and live endpoints
+                    </span>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {summary.map(([status, count]) => (
+                        <StatusBadge key={status} status={status} className="gap-1">
+                          {count}
+                        </StatusBadge>
+                      ))}
+                    </div>
+                  </CardHeader>
+
+                  <CertTable rows={rows} />
+
+                  <CardFooter className="border-t border-border px-4 py-3">
+                    <span className="font-mono text-xs text-muted-foreground">
+                      Showing {rows.length === 0 ? 0 : 1}–{rows.length} of {certs.length}
+                    </span>
+                  </CardFooter>
+                </Card>
+              </div>
+            )}
+
+            {activeTab === "history" && (
+              <div className="max-w-2xl">
+                <PageHeading
+                  title="History"
+                  description="Record a snapshot of the current scan, and see what changed since the last one"
+                />
+
+                {!isLive ? (
+                  <NotConnected />
+                ) : (
+                  <Card size="sm">
+                    <CardContent>
+                      <Button onClick={recordSnapshot} disabled={historyBusy}>
+                        {historyBusy ? "Working…" : "Record snapshot"}
+                      </Button>
+
+                      {historyError && (
+                        <p className="mt-2 text-sm text-destructive">{historyError}</p>
+                      )}
+
+                      {historyDiff && (
+                        <div className="mt-4">
+                          {historyDiff.message && (
+                            <p className="mb-2 text-sm text-muted-foreground">
+                              {historyDiff.message}
+                            </p>
+                          )}
+                          {historyDiff.changes?.length > 0 && (
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>Change</TableHead>
+                                  <TableHead>Source</TableHead>
+                                  <TableHead>Name</TableHead>
+                                  <TableHead>From</TableHead>
+                                  <TableHead>To</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {historyDiff.changes.map((c, i) => (
+                                  <TableRow key={i}>
+                                    <TableCell className="font-mono text-xs uppercase">
+                                      {c.kind}
+                                    </TableCell>
+                                    <TableCell className="font-mono text-xs text-muted-foreground">
+                                      {c.source}
+                                    </TableCell>
+                                    <TableCell>{c.name}</TableCell>
+                                    <TableCell className="font-mono text-xs">
+                                      {c.fromState || "—"}
+                                    </TableCell>
+                                    <TableCell className="font-mono text-xs">
+                                      {c.toState || "—"}
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          )}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            )}
+
+            {activeTab === "ct" && (
+              <div className="max-w-2xl">
+                <PageHeading
+                  title="Check Certificate Transparency logs"
+                  description="Find recently logged certs for your domains not covered by any known Secret"
+                />
+
+                {!isLive ? (
+                  <NotConnected />
+                ) : (
+                  <Card size="sm">
+                    <CardContent>
+                      <FieldGroup>
+                        <Field>
+                          <FieldLabel htmlFor="ct-domains">
+                            Domains (comma or newline separated)
+                          </FieldLabel>
+                          <Textarea
+                            id="ct-domains"
+                            placeholder="example.com, api.example.com"
+                            value={ctDomains}
+                            onChange={(e) => setCtDomains(e.target.value)}
+                          />
+                        </Field>
+                        <Field className="w-fit">
+                          <FieldLabel htmlFor="ct-since">Since</FieldLabel>
+                          <Select value={ctSince} onValueChange={(v) => setCtSince(v ?? "24h")}>
+                            <SelectTrigger id="ct-since" className="w-48">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                {CT_SINCE_OPTIONS.map((opt) => (
+                                  <SelectItem key={opt.value} value={opt.value}>
+                                    {opt.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                        </Field>
+                      </FieldGroup>
+
+                      {ctError && <p className="mt-2 text-sm text-destructive">{ctError}</p>}
+
+                      <div className="mt-4">
+                        <Button onClick={submitCTCheck} disabled={ctBusy || !ctDomains.trim()}>
+                          {ctBusy ? "Checking…" : "Check"}
+                        </Button>
+                      </div>
+
+                      {ctResults && (
+                        <div className="mt-4">
+                          {ctResults.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">
+                              No certs logged in that window.
+                            </p>
+                          ) : (
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>Name</TableHead>
+                                  <TableHead>Status</TableHead>
+                                  <TableHead>Detail</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {ctResults.map((r) => (
+                                  <TableRow key={r.id}>
+                                    <TableCell>{r.name}</TableCell>
+                                    <TableCell>
+                                      <StatusBadge status={r.status} />
+                                    </TableCell>
+                                    <TableCell className="text-muted-foreground">
+                                      {r.detail}
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          )}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            )}
+
+            {activeTab === "settings" && (
+              <div className="max-w-lg">
+                <PageHeading
+                  title="Settings"
+                  description="Change scan thresholds and alerting without restarting the server"
+                />
+
+                {!isLive ? (
+                  <NotConnected />
+                ) : (
+                  <Card size="sm">
+                    <CardContent>
+                      <FieldGroup>
+                        <Field>
+                          <FieldLabel htmlFor="warn-days">Warn days</FieldLabel>
+                          <Input
+                            id="warn-days"
+                            type="number"
+                            min={1}
+                            value={settingsForm.warnDays}
+                            onChange={(e) =>
+                              setSettingsForm((prev) => ({
+                                ...prev,
+                                warnDays: Number(e.target.value),
+                              }))
+                            }
+                          />
+                        </Field>
+
+                        <Field orientation="horizontal">
+                          <Checkbox
+                            id="include-secrets"
+                            checked={settingsForm.includeSecrets}
+                            onCheckedChange={(checked) =>
+                              setSettingsForm((prev) => ({
+                                ...prev,
+                                includeSecrets: checked,
+                              }))
+                            }
+                          />
+                          <Label htmlFor="include-secrets" className="text-sm font-normal">
+                            Scan raw Secrets (drift detection, Ingress cross-referencing)
+                          </Label>
+                        </Field>
+
+                        <Field>
+                          <FieldLabel htmlFor="webhook-url">Webhook URL</FieldLabel>
+                          <Input
+                            id="webhook-url"
+                            placeholder="https://hooks.example.com/certhealthz"
+                            value={settingsForm.webhookURL}
+                            onChange={(e) =>
+                              setSettingsForm((prev) => ({
+                                ...prev,
+                                webhookURL: e.target.value,
+                              }))
+                            }
+                          />
+                        </Field>
+                      </FieldGroup>
+
+                      {settingsError && (
+                        <p className="mt-2 text-sm text-destructive">{settingsError}</p>
+                      )}
+
+                      <div className="mt-4 flex items-center justify-between gap-2">
+                        <Button
+                          variant="secondary"
+                          onClick={sendTestAlert}
+                          disabled={alertBusy || !settingsForm.webhookURL?.trim()}
+                        >
+                          {alertBusy ? "Sending…" : "Send test alert"}
+                        </Button>
+                        <Button onClick={submitSettings} disabled={settingsBusy}>
+                          {settingsBusy ? "Saving…" : "Save"}
+                        </Button>
+                      </div>
+
+                      {alertResult && (
+                        <p
+                          className={
+                            "mt-2 text-sm " +
+                            (alertResult.error ? "text-destructive" : "text-muted-foreground")
+                          }
+                        >
+                          {alertResult.error
+                            ? alertResult.error
+                            : alertResult.sent
+                              ? `Sent — ${alertResult.flagged} flagged certificate(s).`
+                              : "Nothing to send — 0 flagged certificates."}
+                        </p>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            )}
+          </main>
+        </SidebarInset>
+      </SidebarProvider>
     </TooltipProvider>
   );
 }

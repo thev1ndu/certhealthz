@@ -29,6 +29,19 @@ CREATE TABLE IF NOT EXISTS records (
 	detail         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_records_run ON records(run_id);
+CREATE TABLE IF NOT EXISTS settings (
+	id              INTEGER PRIMARY KEY CHECK (id = 1),
+	warn_days       INTEGER NOT NULL,
+	include_secrets BOOLEAN NOT NULL,
+	webhook_url     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS clusters (
+	label      TEXT PRIMARY KEY,
+	kubeconfig BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS endpoints (
+	endpoint TEXT PRIMARY KEY
+);
 `
 
 // Store wraps a SQLite-backed history database.
@@ -259,4 +272,96 @@ func daysShifted(prev, cur *int) bool {
 		delta = -delta
 	}
 	return delta > 1
+}
+
+// SaveSettings persists the dashboard's live-editable scan configuration so
+// it survives a restart, replacing whatever was saved before.
+func (s *Store) SaveSettings(warnDays int, includeSecrets bool, webhookURL string) error {
+	_, err := s.db.Exec(`
+		INSERT INTO settings (id, warn_days, include_secrets, webhook_url) VALUES (1, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET warn_days = excluded.warn_days,
+			include_secrets = excluded.include_secrets, webhook_url = excluded.webhook_url
+	`, warnDays, includeSecrets, webhookURL)
+	if err != nil {
+		return fmt.Errorf("saving settings: %w", err)
+	}
+	return nil
+}
+
+// LoadSettings returns the persisted settings, if any. ok is false when
+// nothing has been saved yet (e.g. first run against a fresh database).
+func (s *Store) LoadSettings() (warnDays int, includeSecrets bool, webhookURL string, ok bool, err error) {
+	row := s.db.QueryRow(`SELECT warn_days, include_secrets, webhook_url FROM settings WHERE id = 1`)
+	if err := row.Scan(&warnDays, &includeSecrets, &webhookURL); err != nil {
+		if err == sql.ErrNoRows {
+			return 0, false, "", false, nil
+		}
+		return 0, false, "", false, fmt.Errorf("loading settings: %w", err)
+	}
+	return warnDays, includeSecrets, webhookURL, true, nil
+}
+
+// StoredCluster is a persisted cluster added through the "Add cluster" UI.
+type StoredCluster struct {
+	Label      string
+	Kubeconfig []byte
+}
+
+// SaveCluster persists a cluster's kubeconfig, keyed by label, so it's
+// reloaded on the next run instead of only lasting until restart.
+func (s *Store) SaveCluster(label string, kubeconfig []byte) error {
+	_, err := s.db.Exec(`
+		INSERT INTO clusters (label, kubeconfig) VALUES (?, ?)
+		ON CONFLICT(label) DO UPDATE SET kubeconfig = excluded.kubeconfig
+	`, label, kubeconfig)
+	if err != nil {
+		return fmt.Errorf("saving cluster %s: %w", label, err)
+	}
+	return nil
+}
+
+// ListClusters returns every persisted cluster upload.
+func (s *Store) ListClusters() ([]StoredCluster, error) {
+	rows, err := s.db.Query(`SELECT label, kubeconfig FROM clusters ORDER BY label`)
+	if err != nil {
+		return nil, fmt.Errorf("listing clusters: %w", err)
+	}
+	defer rows.Close()
+
+	var out []StoredCluster
+	for rows.Next() {
+		var c StoredCluster
+		if err := rows.Scan(&c.Label, &c.Kubeconfig); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// SaveEndpoint persists a probed endpoint so it's reloaded on the next run.
+func (s *Store) SaveEndpoint(endpoint string) error {
+	if _, err := s.db.Exec(`INSERT OR IGNORE INTO endpoints (endpoint) VALUES (?)`, endpoint); err != nil {
+		return fmt.Errorf("saving endpoint %s: %w", endpoint, err)
+	}
+	return nil
+}
+
+// ListEndpoints returns every persisted endpoint.
+func (s *Store) ListEndpoints() ([]string, error) {
+	rows, err := s.db.Query(`SELECT endpoint FROM endpoints ORDER BY endpoint`)
+	if err != nil {
+		return nil, fmt.Errorf("listing endpoints: %w", err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var e string
+		if err := rows.Scan(&e); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }

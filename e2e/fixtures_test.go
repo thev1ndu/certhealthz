@@ -199,7 +199,7 @@ func newIngress(namespace, name, secretName string, hosts ...string) *networking
 
 // newTestHistoryStore opens a history.Store backed by a temp file, closed
 // automatically at test cleanup — in place of the real --db-backed store
-// runDashboard opens.
+// runUI opens.
 func newTestHistoryStore(t testing.TB) *history.Store {
 	t.Helper()
 	store, err := history.Open(filepath.Join(t.TempDir(), "history.db"))

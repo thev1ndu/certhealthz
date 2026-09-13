@@ -38,13 +38,13 @@ const maxSettingsBodySize = 1 << 10 // 1 KiB
 const maxCTBodySize = 16 << 10 // 16 KiB
 
 var (
-	dashboardAddr         string
-	dashboardWarnDays     int
-	dashboardIncludeRaw   bool
-	dashboardWebhookURL   string
-	dashboardEndpoints    []string
-	dashboardProbeTimeout time.Duration
-	dashboardDBPath       string
+	uiAddr         string
+	uiWarnDays     int
+	uiIncludeRaw   bool
+	uiWebhookURL   string
+	uiEndpoints    []string
+	uiProbeTimeout time.Duration
+	uiDBPath       string
 )
 
 // ClusterEntry identifies one cluster the dashboard scans. Kubeconfig is
@@ -62,6 +62,7 @@ type ClusterEntry struct {
 type ClusterRegistry struct {
 	mu    sync.Mutex
 	extra []ClusterEntry
+	store *history.Store
 }
 
 // NewClusterRegistry returns an empty registry, e.g. for tests that don't
@@ -81,7 +82,8 @@ func (c *ClusterRegistry) All() []ClusterEntry {
 }
 
 // AddUpload registers a cluster from uploaded kubeconfig content, keyed by
-// label (the uploaded file's name) for deduplication.
+// label (the uploaded file's name) for deduplication. If a store is
+// attached, the upload is persisted so it's still there on the next run.
 func (c *ClusterRegistry) AddUpload(label string, kubeconfig []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -95,7 +97,39 @@ func (c *ClusterRegistry) AddUpload(label string, kubeconfig []byte) error {
 			return fmt.Errorf("cluster %s is already configured", label)
 		}
 	}
+	if c.store != nil {
+		if err := c.store.SaveCluster(label, kubeconfig); err != nil {
+			return err
+		}
+	}
 	c.extra = append(c.extra, ClusterEntry{Label: label, Kubeconfig: kubeconfig})
+	return nil
+}
+
+// SetStore attaches the history database used to persist and reload
+// clusters added at runtime. Left unset (nil), the registry behaves exactly
+// as before: in-memory only, e.g. for tests.
+func (c *ClusterRegistry) SetStore(store *history.Store) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.store = store
+}
+
+// LoadFromStore hydrates the registry with clusters persisted by a previous
+// run. No-op if no store is attached.
+func (c *ClusterRegistry) LoadFromStore() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.store == nil {
+		return nil
+	}
+	stored, err := c.store.ListClusters()
+	if err != nil {
+		return err
+	}
+	for _, sc := range stored {
+		c.extra = append(c.extra, ClusterEntry{Label: sc.Label, Kubeconfig: sc.Kubeconfig})
+	}
 	return nil
 }
 
@@ -105,6 +139,7 @@ func (c *ClusterRegistry) AddUpload(label string, kubeconfig []byte) error {
 type EndpointRegistry struct {
 	mu    sync.Mutex
 	extra []string
+	store *history.Store
 }
 
 // NewEndpointRegistry returns an empty registry, e.g. for tests that don't
@@ -116,17 +151,19 @@ func NewEndpointRegistry() *EndpointRegistry {
 func (e *EndpointRegistry) All() []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	all := make([]string, 0, len(dashboardEndpoints)+len(e.extra))
-	all = append(all, dashboardEndpoints...)
+	all := make([]string, 0, len(uiEndpoints)+len(e.extra))
+	all = append(all, uiEndpoints...)
 	return append(all, e.extra...)
 }
 
 // Add registers an endpoint (host or host:port) added through the "Add
-// endpoint" UI, rejecting an exact duplicate of one already configured.
+// endpoint" UI, rejecting an exact duplicate of one already configured. If
+// a store is attached, the endpoint is persisted so it's still there on the
+// next run.
 func (e *EndpointRegistry) Add(endpoint string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for _, ep := range dashboardEndpoints {
+	for _, ep := range uiEndpoints {
 		if ep == endpoint {
 			return fmt.Errorf("endpoint %s is already configured", endpoint)
 		}
@@ -136,7 +173,37 @@ func (e *EndpointRegistry) Add(endpoint string) error {
 			return fmt.Errorf("endpoint %s is already configured", endpoint)
 		}
 	}
+	if e.store != nil {
+		if err := e.store.SaveEndpoint(endpoint); err != nil {
+			return err
+		}
+	}
 	e.extra = append(e.extra, endpoint)
+	return nil
+}
+
+// SetStore attaches the history database used to persist and reload
+// endpoints added at runtime. Left unset (nil), the registry behaves
+// exactly as before: in-memory only, e.g. for tests.
+func (e *EndpointRegistry) SetStore(store *history.Store) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.store = store
+}
+
+// LoadFromStore hydrates the registry with endpoints persisted by a
+// previous run. No-op if no store is attached.
+func (e *EndpointRegistry) LoadFromStore() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.store == nil {
+		return nil
+	}
+	stored, err := e.store.ListEndpoints()
+	if err != nil {
+		return err
+	}
+	e.extra = append(e.extra, stored...)
 	return nil
 }
 
@@ -150,6 +217,7 @@ type Settings struct {
 	warnDays       int
 	includeSecrets bool
 	webhookURL     string
+	store          *history.Store
 }
 
 // NewSettings returns a Settings seeded with the given initial values, e.g.
@@ -164,34 +232,70 @@ func (s *Settings) Get() (warnDays int, includeSecrets bool, webhookURL string) 
 	return s.warnDays, s.includeSecrets, s.webhookURL
 }
 
-func (s *Settings) Set(warnDays int, includeSecrets bool, webhookURL string) {
+// Set updates the live settings and, if a store is attached, persists them
+// so they're still there on the next run.
+func (s *Settings) Set(warnDays int, includeSecrets bool, webhookURL string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.store != nil {
+		if err := s.store.SaveSettings(warnDays, includeSecrets, webhookURL); err != nil {
+			return err
+		}
+	}
 	s.warnDays, s.includeSecrets, s.webhookURL = warnDays, includeSecrets, webhookURL
+	return nil
+}
+
+// SetStore attaches the history database used to persist settings changed
+// at runtime. Left unset (nil), Settings behaves exactly as before:
+// in-memory only, e.g. for tests.
+func (s *Settings) SetStore(store *history.Store) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.store = store
+}
+
+// LoadFromStore overrides the current in-memory values with whatever was
+// persisted by a previous run, if anything was. No-op if no store is
+// attached or nothing has been saved yet.
+func (s *Settings) LoadFromStore() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.store == nil {
+		return nil
+	}
+	warnDays, includeSecrets, webhookURL, ok, err := s.store.LoadSettings()
+	if err != nil {
+		return err
+	}
+	if ok {
+		s.warnDays, s.includeSecrets, s.webhookURL = warnDays, includeSecrets, webhookURL
+	}
+	return nil
 }
 
 var (
-	dashboardClusters          = NewClusterRegistry()
-	dashboardEndpointsRegistry = NewEndpointRegistry()
-	dashboardSettings          *Settings
+	uiClusters          = NewClusterRegistry()
+	uiEndpointsRegistry = NewEndpointRegistry()
+	uiSettings          *Settings
 )
 
-var dashboardCmd = &cobra.Command{
+var uiCmd = &cobra.Command{
 	Use:     "ui",
 	Aliases: []string{"dashboard"},
 	Short:   "Serve the bundled web dashboard, backed by a live scan",
-	RunE:    runDashboard,
+	RunE:    runUI,
 }
 
 func init() {
-	dashboardCmd.Flags().StringVar(&dashboardAddr, "addr", ":8090", "address to serve the dashboard on")
-	dashboardCmd.Flags().IntVar(&dashboardWarnDays, "warn-days", 14, "flag certificates expiring within this many days")
-	dashboardCmd.Flags().BoolVar(&dashboardIncludeRaw, "include-secrets", true, "also scan raw kubernetes.io/tls Secrets, for Certificate drift detection and Ingress cross-referencing")
-	dashboardCmd.Flags().StringSliceVar(&dashboardEndpoints, "probe", nil, "live TLS endpoint (host or host:port) to probe on every scan; repeat flag for multiple")
-	dashboardCmd.Flags().DurationVar(&dashboardProbeTimeout, "probe-timeout", 5*time.Second, "per-endpoint dial timeout for --probe endpoints")
-	dashboardCmd.Flags().StringVar(&dashboardWebhookURL, "webhook", "", "webhook URL to POST flagged rows to; changeable at runtime from the UI")
-	dashboardCmd.Flags().StringVar(&dashboardDBPath, "db", defaultHistoryDBPath, "path to the SQLite history database used by the UI's Record/Diff panel")
-	rootCmd.AddCommand(dashboardCmd)
+	uiCmd.Flags().StringVar(&uiAddr, "addr", ":8090", "address to serve the dashboard on")
+	uiCmd.Flags().IntVar(&uiWarnDays, "warn-days", 14, "flag certificates expiring within this many days")
+	uiCmd.Flags().BoolVar(&uiIncludeRaw, "include-secrets", true, "also scan raw kubernetes.io/tls Secrets, for Certificate drift detection and Ingress cross-referencing")
+	uiCmd.Flags().StringSliceVar(&uiEndpoints, "probe", nil, "live TLS endpoint (host or host:port) to probe on every scan; repeat flag for multiple")
+	uiCmd.Flags().DurationVar(&uiProbeTimeout, "probe-timeout", 5*time.Second, "per-endpoint dial timeout for --probe endpoints")
+	uiCmd.Flags().StringVar(&uiWebhookURL, "webhook", "", "webhook URL to POST flagged rows to; changeable at runtime from the UI")
+	uiCmd.Flags().StringVar(&uiDBPath, "db", defaultHistoryDBPath, "path to the SQLite history database used by the UI's Record/Diff panel")
+	rootCmd.AddCommand(uiCmd)
 }
 
 // apiRow is the JSON shape the dashboard frontend expects, matching its
@@ -355,7 +459,10 @@ func handleSettings(settings *Settings, w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "warnDays must be positive", http.StatusBadRequest)
 			return
 		}
-		settings.Set(body.WarnDays, body.IncludeSecrets, strings.TrimSpace(body.WebhookURL))
+		if err := settings.Set(body.WarnDays, body.IncludeSecrets, strings.TrimSpace(body.WebhookURL)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(body); err != nil {
 			log.Printf("encoding /api/settings response: %v", err)
@@ -479,12 +586,12 @@ func handleHistoryDiff(store *history.Store, w http.ResponseWriter, _ *http.Requ
 	}
 }
 
-// dashboardKnownDNSNames flattens the DNS names on every kubernetes.io/tls
+// uiKnownDNSNames flattens the DNS names on every kubernetes.io/tls
 // Secret across every configured dashboard cluster (startup --kubeconfig
 // and uploads alike), so a CT check can tell known from unknown against
 // what's actually deployed here — the cmd/ct.go CLI variant only walks the
 // raw --kubeconfig path list, which uploaded clusters aren't part of.
-func dashboardKnownDNSNames(ctx context.Context, clusters *ClusterRegistry) []string {
+func uiKnownDNSNames(ctx context.Context, clusters *ClusterRegistry) []string {
 	var names []string
 	for _, e := range clusters.All() {
 		label := e.Label
@@ -533,7 +640,7 @@ func handleCT(clusters *ClusterRegistry, settings *Settings, w http.ResponseWrit
 	}
 
 	warnDays, _, _ := settings.Get()
-	known := dashboardKnownDNSNames(r.Context(), clusters)
+	known := uiKnownDNSNames(r.Context(), clusters)
 	rows := ctRows(r.Context(), body.Domains, since, warnDays, known)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -542,10 +649,10 @@ func handleCT(clusters *ClusterRegistry, settings *Settings, w http.ResponseWrit
 	}
 }
 
-// DashboardDeps bundles NewDashboardMux's dependencies so its constructor
+// UIDeps bundles NewUIMux's dependencies so its constructor
 // doesn't grow an ever-longer positional parameter list as the dashboard's
 // API surface grows.
-type DashboardDeps struct {
+type UIDeps struct {
 	Collect   func(context.Context) ([]output.Row, error)
 	Clusters  *ClusterRegistry
 	Endpoints *EndpointRegistry
@@ -553,10 +660,10 @@ type DashboardDeps struct {
 	Settings  *Settings
 }
 
-// NewDashboardMux builds the dashboard's HTTP routing: the embedded UI plus
+// NewUIMux builds the dashboard's HTTP routing: the embedded UI plus
 // the /api/certs, /api/clusters, /api/endpoints, /api/settings, /api/alert,
 // /api/history/record, /api/history/diff, and /api/ct endpoints.
-func NewDashboardMux(uiHandler http.Handler, deps DashboardDeps) *http.ServeMux {
+func NewUIMux(uiHandler http.Handler, deps UIDeps) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/certs", func(w http.ResponseWriter, r *http.Request) {
 		rows, err := deps.Collect(r.Context())
@@ -630,24 +737,38 @@ func NewDashboardMux(uiHandler http.Handler, deps DashboardDeps) *http.ServeMux 
 	return mux
 }
 
-func runDashboard(_ *cobra.Command, _ []string) error {
+func runUI(_ *cobra.Command, _ []string) error {
 	uiHandler, err := ui.Handler()
 	if err != nil {
 		return fmt.Errorf("loading embedded dashboard: %w", err)
 	}
 
-	dashboardSettings = NewSettings(dashboardWarnDays, dashboardIncludeRaw, dashboardWebhookURL)
-
-	store, err := history.Open(dashboardDBPath)
+	store, err := history.Open(uiDBPath)
 	if err != nil {
 		return fmt.Errorf("opening history database: %w", err)
 	}
 	defer store.Close()
 
-	collect := func(ctx context.Context) ([]output.Row, error) {
-		warnDays, includeSecrets, _ := dashboardSettings.Get()
+	uiSettings = NewSettings(uiWarnDays, uiIncludeRaw, uiWebhookURL)
+	uiSettings.SetStore(store)
+	if err := uiSettings.LoadFromStore(); err != nil {
+		log.Printf("loading persisted settings: %v", err)
+	}
 
-		entries := dashboardClusters.All()
+	uiClusters.SetStore(store)
+	if err := uiClusters.LoadFromStore(); err != nil {
+		log.Printf("loading persisted clusters: %v", err)
+	}
+
+	uiEndpointsRegistry.SetStore(store)
+	if err := uiEndpointsRegistry.LoadFromStore(); err != nil {
+		log.Printf("loading persisted endpoints: %v", err)
+	}
+
+	collect := func(ctx context.Context) ([]output.Row, error) {
+		warnDays, includeSecrets, _ := uiSettings.Get()
+
+		entries := uiClusters.All()
 		if len(entries) == 0 {
 			entries = []ClusterEntry{{}} // empty label => default loading rules
 		}
@@ -670,23 +791,23 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 			return nil, err
 		}
 
-		if endpoints := dashboardEndpointsRegistry.All(); len(endpoints) > 0 {
-			rows = append(rows, probeRows(endpoints, dashboardProbeTimeout, warnDays)...)
+		if endpoints := uiEndpointsRegistry.All(); len(endpoints) > 0 {
+			rows = append(rows, probeRows(endpoints, uiProbeTimeout, warnDays)...)
 			output.Sort(rows)
 		}
 		return rows, nil
 	}
-	mux := NewDashboardMux(uiHandler, DashboardDeps{
+	mux := NewUIMux(uiHandler, UIDeps{
 		Collect:   collect,
-		Clusters:  dashboardClusters,
-		Endpoints: dashboardEndpointsRegistry,
+		Clusters:  uiClusters,
+		Endpoints: uiEndpointsRegistry,
 		History:   store,
-		Settings:  dashboardSettings,
+		Settings:  uiSettings,
 	})
 
-	fmt.Printf("certhealthz ui listening on %s\n", dashboardAddr)
+	fmt.Printf("certhealthz ui listening on %s\n", uiAddr)
 	server := &http.Server{
-		Addr:              dashboardAddr,
+		Addr:              uiAddr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
