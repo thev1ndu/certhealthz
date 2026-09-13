@@ -44,7 +44,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("opening history db: %w", err)
 	}
 	if _, err := db.Exec(schema); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("applying history schema: %w", err)
 	}
 	return &Store{db: db}, nil
@@ -60,7 +60,7 @@ func (s *Store) RecordRun(rows []output.Row) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	res, err := tx.Exec(`INSERT INTO runs (ran_at) VALUES (?)`, time.Now().UTC())
 	if err != nil {

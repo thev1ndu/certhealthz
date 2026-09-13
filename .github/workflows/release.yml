@@ -33,8 +33,3 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Needed only for the `brews:` section to push a formula to
-          # thev1ndu/homebrew-tap — a repo-scoped GITHUB_TOKEN can't write to
-          # a different repository. Create this as a PAT with `repo` scope
-          # on the homebrew-tap repo and add it as a secret here.
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

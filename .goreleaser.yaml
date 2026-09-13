@@ -38,21 +38,6 @@ changelog:
       - "^test:"
       - "^chore:"
 
-brews:
-  - name: certhealthz
-    repository:
-      owner: thev1ndu
-      name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    directory: Formula
-    homepage: "https://github.com/thev1ndu/certhealthz"
-    description: "Multi-cluster TLS/certificate expiry radar — single binary, no CRD, no in-cluster install"
-    license: "MIT"
-    install: |
-      bin.install "certhealthz"
-    test: |
-      system "#{bin}/certhealthz --help"
-
 release:
   github:
     owner: thev1ndu

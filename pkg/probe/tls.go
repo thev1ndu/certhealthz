@@ -2,10 +2,22 @@ package probe
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"time"
 )
+
+// Option customizes the TLS dial config used by Probe/ProbeAll. The zero
+// value (no options) preserves the default behavior: verify against the
+// system trust store.
+type Option func(*tls.Config)
+
+// WithRootCAs overrides the trust store used to verify the peer
+// certificate, e.g. for tests dialing a server with a self-signed cert.
+func WithRootCAs(pool *x509.CertPool) Option {
+	return func(cfg *tls.Config) { cfg.RootCAs = pool }
+}
 
 // EndpointCert is the leaf certificate observed live on a TLS endpoint,
 // independent of any Kubernetes state — catches vendor/legacy certs
@@ -19,18 +31,23 @@ type EndpointCert struct {
 
 // Probe dials host:port with TLS and reads the leaf certificate's expiry.
 // Endpoint may be "host" (defaults to :443) or "host:port".
-func Probe(endpoint string, timeout time.Duration) EndpointCert {
+func Probe(endpoint string, timeout time.Duration, opts ...Option) EndpointCert {
 	host, port, err := net.SplitHostPort(endpoint)
 	if err != nil {
 		host, port = endpoint, "443"
 	}
 	addr := net.JoinHostPort(host, port)
 
-	dialer := &net.Dialer{Timeout: timeout}
-	conn, err := tls.DialWithDialer(dialer, "tcp", addr, &tls.Config{
+	cfg := &tls.Config{
 		ServerName: host,
 		MinVersion: tls.VersionTLS12,
-	})
+	}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	dialer := &net.Dialer{Timeout: timeout}
+	conn, err := tls.DialWithDialer(dialer, "tcp", addr, cfg)
 	if err != nil {
 		return EndpointCert{Endpoint: endpoint, Err: fmt.Errorf("dial %s: %w", addr, err)}
 	}
@@ -51,13 +68,13 @@ func Probe(endpoint string, timeout time.Duration) EndpointCert {
 
 // ProbeAll probes every endpoint concurrently and returns results in
 // the same order they were given.
-func ProbeAll(endpoints []string, timeout time.Duration) []EndpointCert {
+func ProbeAll(endpoints []string, timeout time.Duration, opts ...Option) []EndpointCert {
 	results := make([]EndpointCert, len(endpoints))
 	done := make(chan struct{}, len(endpoints))
 
 	for i, ep := range endpoints {
 		go func(i int, ep string) {
-			results[i] = Probe(ep, timeout)
+			results[i] = Probe(ep, timeout, opts...)
 			done <- struct{}{}
 		}(i, ep)
 	}

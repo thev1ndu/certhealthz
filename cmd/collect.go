@@ -7,7 +7,18 @@ import (
 
 	"github.com/thev1ndu/certhealthz/pkg/certmanager"
 	"github.com/thev1ndu/certhealthz/pkg/output"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 )
+
+// ClusterClients bundles the clients CollectRowsFromClients needs for one
+// cluster, decoupling the scan loop from how those clients were built —
+// real kubeconfig-backed clients in production, fakes in e2e tests.
+type ClusterClients struct {
+	Label string
+	Dyn   dynamic.Interface
+	Typed kubernetes.Interface
+}
 
 // collectRows scans every configured kubeconfig target (or the default
 // context if none were given) for cert-manager Certificates and, if
@@ -20,8 +31,7 @@ func collectRows(ctx context.Context, kubeconfigs []string, warnDays int, includ
 		targets = []string{""} // empty => default loading rules
 	}
 
-	var rows []output.Row
-
+	clients := make([]ClusterClients, 0, len(targets))
 	for _, kc := range targets {
 		clusterLabel := kc
 		if clusterLabel == "" {
@@ -33,7 +43,33 @@ func collectRows(ctx context.Context, kubeconfigs []string, warnDays int, includ
 			return nil, fmt.Errorf("building client for %s: %w", clusterLabel, err)
 		}
 
-		certs, err := certmanager.Scan(ctx, clusterLabel, dynClient)
+		cc := ClusterClients{Label: clusterLabel, Dyn: dynClient}
+
+		if includeSecrets {
+			typedClient, err := certmanager.NewTypedClient(kc)
+			if err != nil {
+				return nil, fmt.Errorf("building typed client for %s: %w", clusterLabel, err)
+			}
+			cc.Typed = typedClient
+		}
+
+		clients = append(clients, cc)
+	}
+
+	return CollectRowsFromClients(ctx, clients, warnDays, includeSecrets)
+}
+
+// CollectRowsFromClients runs the actual cert-manager/Secret scan and
+// classification logic against already-built clients, one per cluster. It's
+// the seam that lets e2e tests exercise the real scan pipeline against fake
+// clientsets instead of a real cluster.
+func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnDays int, includeSecrets bool) ([]output.Row, error) {
+	var rows []output.Row
+
+	for _, target := range targets {
+		clusterLabel := target.Label
+
+		certs, err := certmanager.Scan(ctx, clusterLabel, target.Dyn)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 		}
@@ -60,11 +96,7 @@ func collectRows(ctx context.Context, kubeconfigs []string, warnDays int, includ
 		}
 
 		if includeSecrets {
-			typedClient, err := certmanager.NewTypedClient(kc)
-			if err != nil {
-				return nil, fmt.Errorf("building typed client for %s: %w", clusterLabel, err)
-			}
-			secrets, err := certmanager.ScanSecrets(ctx, clusterLabel, typedClient)
+			secrets, err := certmanager.ScanSecrets(ctx, clusterLabel, target.Typed)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 			}

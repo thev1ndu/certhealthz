@@ -1,17 +1,19 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/thev1ndu/certhealthz/pkg/certmanager"
-	"github.com/thev1ndu/certhealthz/pkg/dashboardui"
 	"github.com/thev1ndu/certhealthz/pkg/output"
+	"github.com/thev1ndu/certhealthz/pkg/ui"
 )
 
 var (
@@ -20,22 +22,28 @@ var (
 	dashboardIncludeRaw bool
 )
 
-// clusterRegistry tracks kubeconfig paths the dashboard scans, beyond
+// ClusterRegistry tracks kubeconfig paths the dashboard scans, beyond
 // whatever was passed via --kubeconfig at startup. Guarded by a mutex since
 // the HTTP handlers run concurrently.
-type clusterRegistry struct {
+type ClusterRegistry struct {
 	mu    sync.Mutex
 	extra []string
 }
 
-func (c *clusterRegistry) all() []string {
+// NewClusterRegistry returns an empty registry, e.g. for tests that don't
+// go through the --kubeconfig-backed global.
+func NewClusterRegistry() *ClusterRegistry {
+	return &ClusterRegistry{}
+}
+
+func (c *ClusterRegistry) All() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	all := append([]string(nil), kubeconfigPaths...)
 	return append(all, c.extra...)
 }
 
-func (c *clusterRegistry) add(path string) error {
+func (c *ClusterRegistry) Add(path string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, p := range kubeconfigPaths {
@@ -52,7 +60,7 @@ func (c *clusterRegistry) add(path string) error {
 	return nil
 }
 
-var dashboardClusters = &clusterRegistry{}
+var dashboardClusters = NewClusterRegistry()
 
 var dashboardCmd = &cobra.Command{
 	Use:   "dashboard",
@@ -127,7 +135,7 @@ type addClusterRequest struct {
 	Path string `json:"path"`
 }
 
-func handleAddCluster(w http.ResponseWriter, r *http.Request) {
+func handleAddCluster(clusters *ClusterRegistry, w http.ResponseWriter, r *http.Request) {
 	var req addClusterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -146,26 +154,24 @@ func handleAddCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := dashboardClusters.add(path); err != nil {
+	if err := clusters.Add(path); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(clusterLabels(dashboardClusters.all())); err != nil {
+	if err := json.NewEncoder(w).Encode(clusterLabels(clusters.All())); err != nil {
 		log.Printf("encoding /api/clusters response: %v", err)
 	}
 }
 
-func runDashboard(_ *cobra.Command, _ []string) error {
-	uiHandler, err := dashboardui.Handler()
-	if err != nil {
-		return fmt.Errorf("loading embedded dashboard: %w", err)
-	}
-
+// NewDashboardMux builds the dashboard's HTTP routing: the embedded UI plus
+// the /api/certs and /api/clusters endpoints. collect is injected so tests
+// can back /api/certs with fake clientsets instead of a real cluster.
+func NewDashboardMux(uiHandler http.Handler, collect func(context.Context) ([]output.Row, error), clusters *ClusterRegistry) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/certs", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := collectRows(r.Context(), dashboardClusters.all(), dashboardWarnDays, dashboardIncludeRaw)
+		rows, err := collect(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -179,18 +185,35 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 		switch r.Method {
 		case http.MethodGet:
 			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(clusterLabels(dashboardClusters.all())); err != nil {
+			if err := json.NewEncoder(w).Encode(clusterLabels(clusters.All())); err != nil {
 				log.Printf("encoding /api/clusters response: %v", err)
 			}
 		case http.MethodPost:
-			handleAddCluster(w, r)
+			handleAddCluster(clusters, w, r)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
 	mux.Handle("/", uiHandler)
+	return mux
+}
+
+func runDashboard(_ *cobra.Command, _ []string) error {
+	uiHandler, err := ui.Handler()
+	if err != nil {
+		return fmt.Errorf("loading embedded dashboard: %w", err)
+	}
+
+	collect := func(ctx context.Context) ([]output.Row, error) {
+		return collectRows(ctx, dashboardClusters.All(), dashboardWarnDays, dashboardIncludeRaw)
+	}
+	mux := NewDashboardMux(uiHandler, collect, dashboardClusters)
 
 	fmt.Printf("certhealthz dashboard listening on %s\n", dashboardAddr)
-	server := &http.Server{Addr: dashboardAddr, Handler: mux}
+	server := &http.Server{
+		Addr:              dashboardAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 	return server.ListenAndServe()
 }

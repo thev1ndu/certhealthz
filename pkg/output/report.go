@@ -50,7 +50,7 @@ func Table(rows []Row) {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			r.Source, r.Cluster, r.Namespace, r.Name, days, r.Status, r.Detail)
 	}
-	w.Flush()
+	_ = w.Flush()
 }
 
 // Classify assigns a status tier based on days remaining against the

@@ -43,6 +43,7 @@ func Send(url string, rows []output.Row) error {
 		return fmt.Errorf("marshal alert payload: %w", err)
 	}
 
+	//nolint:gosec // url is the user-supplied --webhook destination by design, not attacker input
 	resp, err := http.Post(url, "application/json", bytes.NewReader(buf))
 	if err != nil {
 		return fmt.Errorf("posting webhook: %w", err)

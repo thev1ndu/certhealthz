@@ -18,6 +18,26 @@ jobs:
       - run: gofmt -l . | grep -v node_modules | (! grep .)
       - run: go test ./...
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.13.2
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test -tags=e2e ./e2e/...
+
   dashboard:
     runs-on: ubuntu-latest
     defaults:

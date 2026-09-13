@@ -22,11 +22,7 @@ sorted-by-urgency table.
 go install github.com/thev1ndu/certhealthz@latest
 ```
 
-Or via Homebrew, once a release has been tagged:
-
-```sh
-brew install thev1ndu/tap/certhealthz
-```
+Or download a prebuilt binary from the [releases page](https://github.com/thev1ndu/certhealthz/releases) (linux/darwin/windows, amd64/arm64).
 
 Or build from source:
 
@@ -111,15 +107,14 @@ MVP.
 - [x] bundled lightweight dashboard: `certhealthz dashboard` serves the React UI in
       `dashboard/` (embedded via `go:embed`, built with `make dashboard-build`) plus a
       `/api/certs` JSON endpoint backed by a live scan.
-- [x] `goreleaser` + Homebrew tap for single-binary distribution: see `.goreleaser.yaml`
-      and `.github/workflows/release.yml` (tag push builds linux/darwin/windows binaries
-      and pushes a formula to `thev1ndu/homebrew-tap`).
+- [x] `goreleaser` for single-binary cross-platform distribution: see `.goreleaser.yaml`
+      and `.github/workflows/release.yml` (tag push builds linux/darwin/windows,
+      amd64/arm64 archives + checksums and attaches them to the GitHub release).
 
 ### Planned
 
 - [ ] drift detection: Certificate reports `Ready` but backing Secret's actual leaf cert is stale/mismatched
 - [ ] renewal failure root-cause hints (rate-limit hit, DNS-01 challenge broken, webhook misconfig)
-- [ ] ServiceNow ticket auto-create per severity tier (not just generic webhook)
 
 ## License
 

@@ -1,0 +1,53 @@
+version: "2"
+
+run:
+  build-tags:
+    - e2e
+
+linters:
+  # noctx (require *Context variants for DB/HTTP/TLS calls) is deliberately
+  # not enabled: pkg/history, pkg/alert, and pkg/probe don't thread
+  # context.Context through their I/O today, and adding it everywhere is an
+  # unrelated architecture change, not a lint fix.
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - unused
+    - errcheck
+    - ineffassign
+    - gosec
+    - gocritic
+    - revive
+    - bodyclose
+    - unconvert
+    - unparam
+    - nakedret
+    - misspell
+    - copyloopvar
+    - errorlint
+    - nilerr
+  settings:
+    revive:
+      rules:
+        # The cobra command-registration pattern (package-level flag vars +
+        # `func init() { rootCmd.AddCommand(...) }`) is this codebase's
+        # established architecture, not a smell — don't flag it.
+        - name: package-comments
+          disabled: true
+  exclusions:
+    presets:
+      - comments
+      - common-false-positives
+      - std-error-handling
+    rules:
+      # Test fixtures deliberately generate throwaway self-signed certs and
+      # dial 127.0.0.1 with a variable timeout; gosec's file/network-path
+      # checks are aimed at production request handling, not test doubles.
+      - path: _test\.go
+        linters:
+          - gosec
+
+formatters:
+  enable:
+    - gofmt
