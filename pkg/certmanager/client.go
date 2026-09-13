@@ -43,3 +43,28 @@ func restConfig(kubeconfigPath string) (*rest.Config, error) {
 		loadingRules, &clientcmd.ConfigOverrides{},
 	).ClientConfig()
 }
+
+// NewDynamicClientFromBytes builds a dynamic client from in-memory
+// kubeconfig content, e.g. a file uploaded through the dashboard rather
+// than read off the server's filesystem.
+func NewDynamicClientFromBytes(kubeconfig []byte) (dynamic.Interface, error) {
+	cfg, err := restConfigFromBytes(kubeconfig)
+	if err != nil {
+		return nil, err
+	}
+	return dynamic.NewForConfig(cfg)
+}
+
+// NewTypedClientFromBytes is the in-memory-kubeconfig counterpart to
+// NewTypedClient.
+func NewTypedClientFromBytes(kubeconfig []byte) (kubernetes.Interface, error) {
+	cfg, err := restConfigFromBytes(kubeconfig)
+	if err != nil {
+		return nil, err
+	}
+	return kubernetes.NewForConfig(cfg)
+}
+
+func restConfigFromBytes(kubeconfig []byte) (*rest.Config, error) {
+	return clientcmd.RESTConfigFromKubeConfig(kubeconfig)
+}

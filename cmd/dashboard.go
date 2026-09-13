@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -16,18 +16,32 @@ import (
 	"github.com/thev1ndu/certhealthz/pkg/ui"
 )
 
+// maxKubeconfigUploadSize bounds how much of an uploaded kubeconfig the
+// dashboard will read into memory. Real kubeconfigs are a few KB; this is
+// generous headroom without letting a client force unbounded allocation.
+const maxKubeconfigUploadSize = 10 << 20 // 10 MiB
+
 var (
 	dashboardAddr       string
 	dashboardWarnDays   int
 	dashboardIncludeRaw bool
 )
 
-// ClusterRegistry tracks kubeconfig paths the dashboard scans, beyond
+// ClusterEntry identifies one cluster the dashboard scans. Kubeconfig is
+// nil for clusters configured via --kubeconfig at startup (Label is then
+// the filesystem path); it holds the raw kubeconfig content for clusters
+// added later through the "Add cluster" upload, which never touches disk.
+type ClusterEntry struct {
+	Label      string
+	Kubeconfig []byte
+}
+
+// ClusterRegistry tracks kubeconfig uploads the dashboard scans, beyond
 // whatever was passed via --kubeconfig at startup. Guarded by a mutex since
 // the HTTP handlers run concurrently.
 type ClusterRegistry struct {
 	mu    sync.Mutex
-	extra []string
+	extra []ClusterEntry
 }
 
 // NewClusterRegistry returns an empty registry, e.g. for tests that don't
@@ -36,27 +50,32 @@ func NewClusterRegistry() *ClusterRegistry {
 	return &ClusterRegistry{}
 }
 
-func (c *ClusterRegistry) All() []string {
+func (c *ClusterRegistry) All() []ClusterEntry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	all := append([]string(nil), kubeconfigPaths...)
+	all := make([]ClusterEntry, 0, len(kubeconfigPaths)+len(c.extra))
+	for _, p := range kubeconfigPaths {
+		all = append(all, ClusterEntry{Label: p})
+	}
 	return append(all, c.extra...)
 }
 
-func (c *ClusterRegistry) Add(path string) error {
+// AddUpload registers a cluster from uploaded kubeconfig content, keyed by
+// label (the uploaded file's name) for deduplication.
+func (c *ClusterRegistry) AddUpload(label string, kubeconfig []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, p := range kubeconfigPaths {
-		if p == path {
-			return fmt.Errorf("cluster %s is already configured", path)
+		if p == label {
+			return fmt.Errorf("cluster %s is already configured", label)
 		}
 	}
-	for _, p := range c.extra {
-		if p == path {
-			return fmt.Errorf("cluster %s is already configured", path)
+	for _, e := range c.extra {
+		if e.Label == label {
+			return fmt.Errorf("cluster %s is already configured", label)
 		}
 	}
-	c.extra = append(c.extra, path)
+	c.extra = append(c.extra, ClusterEntry{Label: label, Kubeconfig: kubeconfig})
 	return nil
 }
 
@@ -119,42 +138,48 @@ func toAPIRows(rows []output.Row) []apiRow {
 	return out
 }
 
-func clusterLabels(paths []string) []string {
-	labels := make([]string, len(paths))
-	for i, p := range paths {
-		if p == "" {
+func clusterLabels(entries []ClusterEntry) []string {
+	labels := make([]string, len(entries))
+	for i, e := range entries {
+		if e.Label == "" {
 			labels[i] = "default"
 		} else {
-			labels[i] = p
+			labels[i] = e.Label
 		}
 	}
 	return labels
 }
 
-type addClusterRequest struct {
-	Path string `json:"path"`
-}
-
 func handleAddCluster(clusters *ClusterRegistry, w http.ResponseWriter, r *http.Request) {
-	var req addClusterRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+	if err := r.ParseMultipartForm(maxKubeconfigUploadSize); err != nil {
+		http.Error(w, "invalid upload", http.StatusBadRequest)
 		return
 	}
-	path := strings.TrimSpace(req.Path)
-	if path == "" {
-		http.Error(w, "path is required", http.StatusBadRequest)
+	file, header, err := r.FormFile("kubeconfig")
+	if err != nil {
+		http.Error(w, "kubeconfig file is required", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(io.LimitReader(file, maxKubeconfigUploadSize))
+	if err != nil {
+		http.Error(w, "reading uploaded file", http.StatusBadRequest)
+		return
+	}
+	if len(data) == 0 {
+		http.Error(w, "uploaded kubeconfig is empty", http.StatusBadRequest)
 		return
 	}
 
-	// Fail fast on a bad kubeconfig path/context rather than silently adding
-	// a cluster that will only ever produce warnings on every scan.
-	if _, err := certmanager.NewDynamicClient(path); err != nil {
-		http.Error(w, fmt.Sprintf("could not connect using %s: %v", path, err), http.StatusBadRequest)
+	// Fail fast on a bad kubeconfig rather than silently adding a cluster
+	// that will only ever produce warnings on every scan.
+	if _, err := certmanager.NewDynamicClientFromBytes(data); err != nil {
+		http.Error(w, fmt.Sprintf("could not connect using %s: %v", header.Filename, err), http.StatusBadRequest)
 		return
 	}
 
-	if err := clusters.Add(path); err != nil {
+	if err := clusters.AddUpload(header.Filename, data); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
@@ -205,7 +230,25 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 	}
 
 	collect := func(ctx context.Context) ([]output.Row, error) {
-		return collectRows(ctx, dashboardClusters.All(), dashboardWarnDays, dashboardIncludeRaw)
+		entries := dashboardClusters.All()
+		if len(entries) == 0 {
+			entries = []ClusterEntry{{}} // empty label => default loading rules
+		}
+
+		clients := make([]ClusterClients, 0, len(entries))
+		for _, e := range entries {
+			label := e.Label
+			if label == "" {
+				label = "default"
+			}
+			cc, err := buildClusterClients(label, e.Kubeconfig, e.Label, dashboardIncludeRaw)
+			if err != nil {
+				return nil, err
+			}
+			clients = append(clients, cc)
+		}
+
+		return CollectRowsFromClients(ctx, clients, dashboardWarnDays, dashboardIncludeRaw)
 	}
 	mux := NewDashboardMux(uiHandler, collect, dashboardClusters)
 

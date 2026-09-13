@@ -1,25 +1,25 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Badge,
-  Banner,
   Button,
-  Dialog,
   DropdownMenu,
-  Input,
   InputGroup,
   LayerCard,
+  Popover,
   Text,
   Toolbar,
   Tooltip,
   TooltipProvider,
 } from "@cloudflare/kumo";
 import {
+  CloudArrowUpIcon,
   DownloadSimpleIcon,
+  FileXIcon,
   FunnelIcon,
   GearSixIcon,
-  InfoIcon,
   MagnifyingGlassIcon,
   PlusIcon,
+  XIcon,
 } from "@phosphor-icons/react";
 import CertTable, { STATUS_BADGE, STATUS_LABEL } from "./components/CertTable";
 import { certs as mockCerts } from "./data/certs";
@@ -43,6 +43,11 @@ function matchesFilters(row, statusFilter, clusterFilter) {
 }
 
 const SUMMARY_ORDER = ["expired", "expiring", "ok", "error"];
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  return `${(bytes / 1024).toFixed(1)} KB`;
+}
 
 export default function App() {
   const [query, setQuery] = useState("");
@@ -68,30 +73,34 @@ export default function App() {
   }, []);
 
   const [addClusterOpen, setAddClusterOpen] = useState(false);
-  const [addClusterPath, setAddClusterPath] = useState("");
+  const [addClusterFile, setAddClusterFile] = useState(null);
+  const [addClusterDragOver, setAddClusterDragOver] = useState(false);
   const [addClusterError, setAddClusterError] = useState("");
   const [addClusterBusy, setAddClusterBusy] = useState(false);
 
+  function resetAddCluster() {
+    setAddClusterFile(null);
+    setAddClusterDragOver(false);
+    setAddClusterError("");
+  }
+
   function submitAddCluster() {
-    const path = addClusterPath.trim();
-    if (!path) {
-      setAddClusterError("Enter a kubeconfig path");
+    if (!addClusterFile) {
+      setAddClusterError("Choose a kubeconfig file");
       return;
     }
     setAddClusterBusy(true);
     setAddClusterError("");
-    fetch("/api/clusters", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path }),
-    })
+    const body = new FormData();
+    body.append("kubeconfig", addClusterFile);
+    fetch("/api/clusters", { method: "POST", body })
       .then(async (res) => {
         if (!res.ok) throw new Error(await res.text());
         return reloadCerts();
       })
       .then(() => {
         setAddClusterOpen(false);
-        setAddClusterPath("");
+        resetAddCluster();
       })
       .catch((err) => setAddClusterError(String(err.message || err)))
       .finally(() => setAddClusterBusy(false));
@@ -180,36 +189,13 @@ export default function App() {
         <header className="mb-3 flex flex-wrap items-baseline justify-between gap-3">
           <div className="flex flex-wrap items-baseline gap-3">
             <Text variant="heading" size="lg" as="h1">
-              certhealthz
+              CertHealthz
             </Text>
             <Text variant="secondary" size="xs">
               Live TLS certificate health across clusters
             </Text>
           </div>
-          <Text as="code" variant="mono-secondary" size="xs">
-            $ certhealthz scan --dashboard :8090
-          </Text>
         </header>
-
-        {!isLive && (
-          <Banner
-            className="mb-3"
-            size="sm"
-            variant="secondary"
-            icon={<InfoIcon weight="fill" />}
-            title="Sample data — nothing here hit a real cluster"
-            description={
-              <>
-                No <Text as="code" variant="mono" size="sm">/api/certs</Text>{" "}
-                backend reachable, showing mock data. Run{" "}
-                <Text as="code" variant="mono" size="sm">
-                  certhealthz dashboard
-                </Text>{" "}
-                to serve this against a real scan.
-              </>
-            }
-          />
-        )}
 
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <Toolbar className="flex-1">
@@ -290,60 +276,120 @@ export default function App() {
             </Toolbar.Button>
           </Toolbar>
           {isLive ? (
-            <Dialog.Root
+            <Popover
               open={addClusterOpen}
               onOpenChange={(open) => {
                 setAddClusterOpen(open);
-                if (!open) {
-                  setAddClusterPath("");
-                  setAddClusterError("");
-                }
+                if (!open) resetAddCluster();
               }}
             >
-              <Dialog.Trigger
+              <Popover.Trigger
                 render={(p) => (
                   <Button {...p} variant="primary" icon={PlusIcon}>
                     Add cluster
                   </Button>
                 )}
               />
-              <Dialog className="p-6">
-                <div className="mb-3 flex items-start justify-between gap-4">
-                  <Dialog.Title className="text-lg font-semibold">
+              <Popover.Content className="w-96 p-6">
+                <div className="mb-4 flex items-start justify-between gap-4">
+                  <Popover.Title className="text-lg font-semibold">
                     Add cluster
-                  </Dialog.Title>
-                  <Dialog.Close
+                  </Popover.Title>
+                  <Popover.Close
                     aria-label="Close"
                     render={(p) => (
                       <Button
                         {...p}
                         variant="secondary"
                         shape="square"
+                        icon={<XIcon />}
                         aria-label="Close"
-                      >
-                        ×
-                      </Button>
+                      />
                     )}
                   />
                 </div>
-                <Dialog.Description className="mb-4 text-kumo-subtle">
-                  Path to a kubeconfig file readable by the{" "}
-                  <Text as="code" variant="mono" size="sm">
-                    certhealthz dashboard
-                  </Text>{" "}
-                  process. It's validated before being added.
-                </Dialog.Description>
-                <Input
-                  placeholder="/home/you/.kube/staging-config"
-                  value={addClusterPath}
-                  onChange={(e) => setAddClusterPath(e.target.value)}
-                  error={addClusterError || undefined}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") submitAddCluster();
-                  }}
-                />
+                <Popover.Description className="mb-4 text-kumo-subtle">
+                  Upload a kubeconfig file for the cluster you want to
+                  monitor. It's validated before being added.
+                </Popover.Description>
+
+                {addClusterFile ? (
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-kumo-line bg-kumo-base px-3 py-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Text as="span" size="sm" className="truncate">
+                        {addClusterFile.name}
+                      </Text>
+                      <Text as="span" variant="secondary" size="xs">
+                        {formatFileSize(addClusterFile.size)}
+                      </Text>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      shape="square"
+                      size="sm"
+                      icon={<FileXIcon />}
+                      aria-label="Remove file"
+                      onClick={() => {
+                        setAddClusterFile(null);
+                        setAddClusterError("");
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <label
+                    className={`flex cursor-pointer flex-col items-center gap-2 rounded-lg border border-dashed px-4 py-8 text-center transition-colors ${
+                      addClusterDragOver
+                        ? "border-kumo-accent bg-kumo-elevated"
+                        : "border-kumo-line"
+                    }`}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setAddClusterDragOver(true);
+                    }}
+                    onDragLeave={() => setAddClusterDragOver(false)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setAddClusterDragOver(false);
+                      const file = e.dataTransfer.files?.[0];
+                      if (file) {
+                        setAddClusterFile(file);
+                        setAddClusterError("");
+                      }
+                    }}
+                  >
+                    <CloudArrowUpIcon
+                      size={28}
+                      className="text-kumo-subtle"
+                    />
+                    <Text as="span" size="sm">
+                      Drag and drop your kubeconfig file here, or{" "}
+                      <Text as="span" variant="mono" size="sm">
+                        click to browse
+                      </Text>
+                    </Text>
+                    <input
+                      type="file"
+                      accept=".yaml,.yml,text/yaml,text/plain,application/x-yaml"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          setAddClusterFile(file);
+                          setAddClusterError("");
+                        }
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                )}
+                {addClusterError && (
+                  <Text variant="error" size="sm" className="mt-2 block">
+                    {addClusterError}
+                  </Text>
+                )}
+
                 <div className="mt-4 flex justify-end gap-2">
-                  <Dialog.Close
+                  <Popover.Close
                     render={(p) => (
                       <Button {...p} variant="secondary">
                         Cancel
@@ -353,13 +399,13 @@ export default function App() {
                   <Button
                     variant="primary"
                     onClick={submitAddCluster}
-                    disabled={addClusterBusy}
+                    disabled={addClusterBusy || !addClusterFile}
                   >
                     {addClusterBusy ? "Checking…" : "Add"}
                   </Button>
                 </div>
-              </Dialog>
-            </Dialog.Root>
+              </Popover.Content>
+            </Popover>
           ) : (
             <Tooltip content="No backend wired up in this preview">
               <Button variant="primary" icon={PlusIcon} disabled>

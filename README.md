@@ -6,7 +6,7 @@
 [![Release](https://img.shields.io/github/v/release/thev1ndu/certhealthz)](https://github.com/thev1ndu/certhealthz/releases)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-Multi-cluster TLS/certificate expiry radar. Single Go binary, no CRD, no
+Live TLS certificate health across clusters. Single Go binary, no CRD, no
 in-cluster install — point it at kubeconfigs and/or live endpoints and get
 a unified expiry report.
 

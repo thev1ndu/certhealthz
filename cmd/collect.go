@@ -20,6 +20,41 @@ type ClusterClients struct {
 	Typed kubernetes.Interface
 }
 
+// buildClusterClients builds the dynamic (and, if requested, typed) client
+// for one cluster target. If kubeconfig is non-nil, the client is built
+// from that in-memory content (e.g. a dashboard file upload); otherwise
+// it's built from path (a filesystem path, or "" for the default loading
+// rules).
+func buildClusterClients(label string, kubeconfig []byte, path string, includeSecrets bool) (ClusterClients, error) {
+	var dynClient dynamic.Interface
+	var err error
+	if kubeconfig != nil {
+		dynClient, err = certmanager.NewDynamicClientFromBytes(kubeconfig)
+	} else {
+		dynClient, err = certmanager.NewDynamicClient(path)
+	}
+	if err != nil {
+		return ClusterClients{}, fmt.Errorf("building client for %s: %w", label, err)
+	}
+
+	cc := ClusterClients{Label: label, Dyn: dynClient}
+
+	if includeSecrets {
+		var typedClient kubernetes.Interface
+		if kubeconfig != nil {
+			typedClient, err = certmanager.NewTypedClientFromBytes(kubeconfig)
+		} else {
+			typedClient, err = certmanager.NewTypedClient(path)
+		}
+		if err != nil {
+			return ClusterClients{}, fmt.Errorf("building typed client for %s: %w", label, err)
+		}
+		cc.Typed = typedClient
+	}
+
+	return cc, nil
+}
+
 // collectRows scans every configured kubeconfig target (or the default
 // context if none were given) for cert-manager Certificates and, if
 // requested, raw kubernetes.io/tls Secrets, returning a unified, sorted
@@ -38,19 +73,9 @@ func collectRows(ctx context.Context, kubeconfigs []string, warnDays int, includ
 			clusterLabel = "default"
 		}
 
-		dynClient, err := certmanager.NewDynamicClient(kc)
+		cc, err := buildClusterClients(clusterLabel, nil, kc, includeSecrets)
 		if err != nil {
-			return nil, fmt.Errorf("building client for %s: %w", clusterLabel, err)
-		}
-
-		cc := ClusterClients{Label: clusterLabel, Dyn: dynClient}
-
-		if includeSecrets {
-			typedClient, err := certmanager.NewTypedClient(kc)
-			if err != nil {
-				return nil, fmt.Errorf("building typed client for %s: %w", clusterLabel, err)
-			}
-			cc.Typed = typedClient
+			return nil, err
 		}
 
 		clients = append(clients, cc)

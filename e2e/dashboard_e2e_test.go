@@ -3,11 +3,12 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -93,10 +94,11 @@ func TestDashboardCertsEndToEnd(t *testing.T) {
 	}
 }
 
-// TestDashboardAddClusterRejectsBadPathEndToEnd asserts POST /api/clusters
-// fails fast with 400 on an unreachable kubeconfig path, without needing a
-// fake clientset (the validation happens before any client is used).
-func TestDashboardAddClusterRejectsBadPathEndToEnd(t *testing.T) {
+// TestDashboardAddClusterRejectsBadKubeconfigEndToEnd asserts POST
+// /api/clusters fails fast with 400 on an invalid uploaded kubeconfig,
+// without needing a fake clientset (the validation happens before any
+// client is used).
+func TestDashboardAddClusterRejectsBadKubeconfigEndToEnd(t *testing.T) {
 	uiHandler, err := ui.Handler()
 	if err != nil {
 		t.Fatalf("ui.Handler: %v", err)
@@ -106,14 +108,24 @@ func TestDashboardAddClusterRejectsBadPathEndToEnd(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	body := strings.NewReader(`{"path":"/nonexistent/kubeconfig-e2e-test"}`)
-	resp, err := http.Post(server.URL+"/api/clusters", "application/json", body)
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	part, err := w.CreateFormFile("kubeconfig", "bad-config.yaml")
+	if err != nil {
+		t.Fatalf("CreateFormFile: %v", err)
+	}
+	part.Write([]byte("not: a valid kubeconfig"))
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing multipart writer: %v", err)
+	}
+
+	resp, err := http.Post(server.URL+"/api/clusters", w.FormDataContentType(), &buf)
 	if err != nil {
 		t.Fatalf("POST /api/clusters: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("expected 400 for unreachable kubeconfig path, got %d", resp.StatusCode)
+		t.Errorf("expected 400 for invalid kubeconfig upload, got %d", resp.StatusCode)
 	}
 }
