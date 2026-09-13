@@ -578,6 +578,9 @@ func handleHistoryDiff(store *history.Store, w http.ResponseWriter, _ *http.Requ
 				ToState:   c.ToState,
 			})
 		}
+		if len(resp.Changes) == 0 {
+			resp.Message = "no changes since the last recorded snapshot"
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

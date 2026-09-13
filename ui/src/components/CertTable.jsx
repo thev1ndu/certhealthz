@@ -19,8 +19,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { cn } from "@/lib/utils";
 
-export { STATUS_LABEL };
-
 const COLUMNS = [
   {
     id: "name",
