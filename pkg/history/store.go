@@ -339,6 +339,15 @@ func (s *Store) ListClusters() ([]StoredCluster, error) {
 	return out, rows.Err()
 }
 
+// DeleteCluster removes a persisted cluster upload, so it's no longer
+// reloaded on the next run. No-op (no error) if the label isn't there.
+func (s *Store) DeleteCluster(label string) error {
+	if _, err := s.db.Exec(`DELETE FROM clusters WHERE label = ?`, label); err != nil {
+		return fmt.Errorf("deleting cluster %s: %w", label, err)
+	}
+	return nil
+}
+
 // SaveEndpoint persists a probed endpoint so it's reloaded on the next run.
 func (s *Store) SaveEndpoint(endpoint string) error {
 	if _, err := s.db.Exec(`INSERT OR IGNORE INTO endpoints (endpoint) VALUES (?)`, endpoint); err != nil {
@@ -364,4 +373,13 @@ func (s *Store) ListEndpoints() ([]string, error) {
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// DeleteEndpoint removes a persisted endpoint, so it's no longer reloaded
+// on the next run. No-op (no error) if the endpoint isn't there.
+func (s *Store) DeleteEndpoint(endpoint string) error {
+	if _, err := s.db.Exec(`DELETE FROM endpoints WHERE endpoint = ?`, endpoint); err != nil {
+		return fmt.Errorf("deleting endpoint %s: %w", endpoint, err)
+	}
+	return nil
 }

@@ -34,8 +34,20 @@ export function addCluster(kubeconfigFile) {
   return request("/api/clusters", { method: "POST", body });
 }
 
+export function removeCluster(label) {
+  return request(`/api/clusters/${encodeURIComponent(label)}`, { method: "DELETE" });
+}
+
+export function getEndpoints() {
+  return request("/api/endpoints");
+}
+
 export function addEndpoint(endpoint) {
   return postJSON("/api/endpoints", { endpoint });
+}
+
+export function removeEndpoint(endpoint) {
+  return request(`/api/endpoints/${encodeURIComponent(endpoint)}`, { method: "DELETE" });
 }
 
 export function getSettings() {

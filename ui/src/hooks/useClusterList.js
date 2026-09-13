@@ -8,7 +8,7 @@ export function useClusterList(isLive) {
 
   const reload = useCallback(() => {
     return getClusters()
-      .then(setServerClusters)
+      .then((entries) => setServerClusters(entries.map((e) => e.label)))
       .catch(() => {
         // filter dropdown just falls back to clusters seen in cert rows
       });

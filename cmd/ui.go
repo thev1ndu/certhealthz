@@ -51,9 +51,12 @@ var (
 // nil for clusters configured via --kubeconfig at startup (Label is then
 // the filesystem path); it holds the raw kubeconfig content for clusters
 // added later through the "Add cluster" upload, which never touches disk.
+// Removable is true only for the latter — a --kubeconfig entry can't be
+// removed from the UI since it would just reappear on the next restart.
 type ClusterEntry struct {
 	Label      string
 	Kubeconfig []byte
+	Removable  bool
 }
 
 // ClusterRegistry tracks kubeconfig uploads the dashboard scans, beyond
@@ -102,8 +105,36 @@ func (c *ClusterRegistry) AddUpload(label string, kubeconfig []byte) error {
 			return err
 		}
 	}
-	c.extra = append(c.extra, ClusterEntry{Label: label, Kubeconfig: kubeconfig})
+	c.extra = append(c.extra, ClusterEntry{Label: label, Kubeconfig: kubeconfig, Removable: true})
 	return nil
+}
+
+// Remove drops a cluster previously added through the "Add cluster" UI
+// (or restored from a previous run), and deletes it from the store if one
+// is attached. Returns an error if label isn't a removable entry — either
+// it isn't configured at all, or it came from a --kubeconfig flag, which
+// can only be removed by restarting without that flag.
+func (c *ClusterRegistry) Remove(label string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i, e := range c.extra {
+		if e.Label != label {
+			continue
+		}
+		if c.store != nil {
+			if err := c.store.DeleteCluster(label); err != nil {
+				return err
+			}
+		}
+		c.extra = append(c.extra[:i:i], c.extra[i+1:]...)
+		return nil
+	}
+	for _, p := range kubeconfigPaths {
+		if p == label {
+			return fmt.Errorf("cluster %s was configured via --kubeconfig at startup and can't be removed from the UI", label)
+		}
+	}
+	return fmt.Errorf("cluster %s is not configured", label)
 }
 
 // SetStore attaches the history database used to persist and reload
@@ -128,7 +159,7 @@ func (c *ClusterRegistry) LoadFromStore() error {
 		return err
 	}
 	for _, sc := range stored {
-		c.extra = append(c.extra, ClusterEntry{Label: sc.Label, Kubeconfig: sc.Kubeconfig})
+		c.extra = append(c.extra, ClusterEntry{Label: sc.Label, Kubeconfig: sc.Kubeconfig, Removable: true})
 	}
 	return nil
 }
@@ -156,6 +187,28 @@ func (e *EndpointRegistry) All() []string {
 	return append(all, e.extra...)
 }
 
+// EndpointEntry pairs an endpoint with whether it can be removed from the
+// UI — true for ones added through "Add endpoint" (or restored from a
+// previous run), false for --probe flag endpoints.
+type EndpointEntry struct {
+	Endpoint  string
+	Removable bool
+}
+
+// AllEntries is All(), annotated with removability for the management UI.
+func (e *EndpointRegistry) AllEntries() []EndpointEntry {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	entries := make([]EndpointEntry, 0, len(uiEndpoints)+len(e.extra))
+	for _, ep := range uiEndpoints {
+		entries = append(entries, EndpointEntry{Endpoint: ep})
+	}
+	for _, ep := range e.extra {
+		entries = append(entries, EndpointEntry{Endpoint: ep, Removable: true})
+	}
+	return entries
+}
+
 // Add registers an endpoint (host or host:port) added through the "Add
 // endpoint" UI, rejecting an exact duplicate of one already configured. If
 // a store is attached, the endpoint is persisted so it's still there on the
@@ -180,6 +233,34 @@ func (e *EndpointRegistry) Add(endpoint string) error {
 	}
 	e.extra = append(e.extra, endpoint)
 	return nil
+}
+
+// Remove drops an endpoint previously added through the "Add endpoint" UI
+// (or restored from a previous run), and deletes it from the store if one
+// is attached. Returns an error if endpoint isn't a removable entry —
+// either it isn't configured at all, or it came from a --probe flag, which
+// can only be removed by restarting without that flag.
+func (e *EndpointRegistry) Remove(endpoint string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i, ep := range e.extra {
+		if ep != endpoint {
+			continue
+		}
+		if e.store != nil {
+			if err := e.store.DeleteEndpoint(endpoint); err != nil {
+				return err
+			}
+		}
+		e.extra = append(e.extra[:i:i], e.extra[i+1:]...)
+		return nil
+	}
+	for _, ep := range uiEndpoints {
+		if ep == endpoint {
+			return fmt.Errorf("endpoint %s was configured via --probe at startup and can't be removed from the UI", endpoint)
+		}
+	}
+	return fmt.Errorf("endpoint %s is not configured", endpoint)
 }
 
 // SetStore attaches the history database used to persist and reload
@@ -342,16 +423,36 @@ func toAPIRows(rows []output.Row) []apiRow {
 	return out
 }
 
-func clusterLabels(entries []ClusterEntry) []string {
-	labels := make([]string, len(entries))
+// apiCluster is the JSON shape of one entry in GET /api/clusters.
+type apiCluster struct {
+	Label     string `json:"label"`
+	Removable bool   `json:"removable"`
+}
+
+func apiClusters(entries []ClusterEntry) []apiCluster {
+	out := make([]apiCluster, len(entries))
 	for i, e := range entries {
-		if e.Label == "" {
-			labels[i] = "default"
-		} else {
-			labels[i] = e.Label
+		label := e.Label
+		if label == "" {
+			label = "default"
 		}
+		out[i] = apiCluster{Label: label, Removable: e.Removable}
 	}
-	return labels
+	return out
+}
+
+// apiEndpoint is the JSON shape of one entry in GET /api/endpoints.
+type apiEndpoint struct {
+	Endpoint  string `json:"endpoint"`
+	Removable bool   `json:"removable"`
+}
+
+func apiEndpoints(entries []EndpointEntry) []apiEndpoint {
+	out := make([]apiEndpoint, len(entries))
+	for i, e := range entries {
+		out[i] = apiEndpoint{Endpoint: e.Endpoint, Removable: e.Removable}
+	}
+	return out
 }
 
 func handleAddCluster(clusters *ClusterRegistry, w http.ResponseWriter, r *http.Request) {
@@ -394,7 +495,22 @@ func handleAddCluster(clusters *ClusterRegistry, w http.ResponseWriter, r *http.
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(clusterLabels(clusters.All())); err != nil {
+	if err := json.NewEncoder(w).Encode(apiClusters(clusters.All())); err != nil {
+		log.Printf("encoding /api/clusters response: %v", err)
+	}
+}
+
+// handleRemoveCluster drops a cluster previously added through the "Add
+// cluster" UI. Clusters configured via --kubeconfig at startup can't be
+// removed this way — the registry rejects those with a 400.
+func handleRemoveCluster(clusters *ClusterRegistry, w http.ResponseWriter, r *http.Request) {
+	label := r.PathValue("label")
+	if err := clusters.Remove(label); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(apiClusters(clusters.All())); err != nil {
 		log.Printf("encoding /api/clusters response: %v", err)
 	}
 }
@@ -429,7 +545,22 @@ func handleAddEndpoint(endpoints *EndpointRegistry, w http.ResponseWriter, r *ht
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(endpoints.All()); err != nil {
+	if err := json.NewEncoder(w).Encode(apiEndpoints(endpoints.AllEntries())); err != nil {
+		log.Printf("encoding /api/endpoints response: %v", err)
+	}
+}
+
+// handleRemoveEndpoint drops an endpoint previously added through the "Add
+// endpoint" UI. Endpoints configured via --probe at startup can't be
+// removed this way — the registry rejects those with a 400.
+func handleRemoveEndpoint(endpoints *EndpointRegistry, w http.ResponseWriter, r *http.Request) {
+	endpoint := r.PathValue("endpoint")
+	if err := endpoints.Remove(endpoint); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(apiEndpoints(endpoints.AllEntries())); err != nil {
 		log.Printf("encoding /api/endpoints response: %v", err)
 	}
 }
@@ -664,8 +795,10 @@ type UIDeps struct {
 }
 
 // NewUIMux builds the dashboard's HTTP routing: the embedded UI plus
-// the /api/certs, /api/clusters, /api/endpoints, /api/settings, /api/alert,
-// /api/history/record, /api/history/diff, and /api/ct endpoints.
+// the /api/certs, /api/clusters (+ DELETE /api/clusters/{label}),
+// /api/endpoints (+ DELETE /api/endpoints/{endpoint}), /api/settings,
+// /api/alert, /api/history/record, /api/history/diff, and /api/ct
+// endpoints.
 func NewUIMux(uiHandler http.Handler, deps UIDeps) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/certs", func(w http.ResponseWriter, r *http.Request) {
@@ -683,7 +816,7 @@ func NewUIMux(uiHandler http.Handler, deps UIDeps) *http.ServeMux {
 		switch r.Method {
 		case http.MethodGet:
 			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(clusterLabels(deps.Clusters.All())); err != nil {
+			if err := json.NewEncoder(w).Encode(apiClusters(deps.Clusters.All())); err != nil {
 				log.Printf("encoding /api/clusters response: %v", err)
 			}
 		case http.MethodPost:
@@ -692,11 +825,14 @@ func NewUIMux(uiHandler http.Handler, deps UIDeps) *http.ServeMux {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+	mux.HandleFunc("DELETE /api/clusters/{label}", func(w http.ResponseWriter, r *http.Request) {
+		handleRemoveCluster(deps.Clusters, w, r)
+	})
 	mux.HandleFunc("/api/endpoints", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(deps.Endpoints.All()); err != nil {
+			if err := json.NewEncoder(w).Encode(apiEndpoints(deps.Endpoints.AllEntries())); err != nil {
 				log.Printf("encoding /api/endpoints response: %v", err)
 			}
 		case http.MethodPost:
@@ -704,6 +840,9 @@ func NewUIMux(uiHandler http.Handler, deps UIDeps) *http.ServeMux {
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+	})
+	mux.HandleFunc("DELETE /api/endpoints/{endpoint}", func(w http.ResponseWriter, r *http.Request) {
+		handleRemoveEndpoint(deps.Endpoints, w, r)
 	})
 	mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
 		handleSettings(deps.Settings, w, r)

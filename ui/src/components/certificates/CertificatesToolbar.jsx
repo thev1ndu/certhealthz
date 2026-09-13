@@ -1,6 +1,7 @@
 import { DownloadSimpleIcon, FunnelIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
 import AddClusterPopover from "@/components/certificates/AddClusterPopover";
 import AddEndpointPopover from "@/components/certificates/AddEndpointPopover";
+import SourcesDialog from "@/components/certificates/SourcesDialog";
 import { STATUS_LABEL } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,6 +30,7 @@ export default function CertificatesToolbar({
   isLive,
   addCluster,
   addEndpoint,
+  onSourcesChanged,
 }) {
   const activeFilterCount = statusFilter.size + clusterFilter.size;
 
@@ -104,6 +106,7 @@ export default function CertificatesToolbar({
       </Button>
 
       <div className="ml-auto flex items-center gap-2">
+        <SourcesDialog isLive={isLive} onChanged={onSourcesChanged} />
         <AddClusterPopover isLive={isLive} addCluster={addCluster} />
         <AddEndpointPopover isLive={isLive} addEndpoint={addEndpoint} />
       </div>

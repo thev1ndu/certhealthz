@@ -107,6 +107,7 @@ export default function CertificatesPage({ certs, isLive, reloadCerts }) {
         isLive={isLive}
         addCluster={addCluster}
         addEndpoint={addEndpoint}
+        onSourcesChanged={refreshAfterAdd}
       />
 
       <Card size="sm" className="gap-0 p-0">

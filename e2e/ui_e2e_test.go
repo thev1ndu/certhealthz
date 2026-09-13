@@ -32,6 +32,18 @@ type apiRow struct {
 	Detail    string `json:"detail"`
 }
 
+// apiEndpointEntry and apiClusterEntry mirror cmd's (unexported) apiEndpoint
+// and apiCluster types, for decoding GET /api/endpoints and /api/clusters.
+type apiEndpointEntry struct {
+	Endpoint  string `json:"endpoint"`
+	Removable bool   `json:"removable"`
+}
+
+type apiClusterEntry struct {
+	Label     string `json:"label"`
+	Removable bool   `json:"removable"`
+}
+
 // TestUICertsEndToEnd wires cmd.NewUIMux to a collect closure
 // backed by fake clientsets (the same seam scan_e2e_test.go exercises
 // directly), serves it over a real HTTP server, and asserts the JSON the
@@ -147,7 +159,7 @@ func TestUIEndpointsEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /api/endpoints: %v", err)
 	}
-	var before []string
+	var before []apiEndpointEntry
 	if err := json.NewDecoder(resp.Body).Decode(&before); err != nil {
 		t.Fatalf("decoding /api/endpoints response: %v", err)
 	}
@@ -165,7 +177,14 @@ func TestUIEndpointsEndToEnd(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
+	var afterAdd []apiEndpointEntry
+	if err := json.NewDecoder(resp.Body).Decode(&afterAdd); err != nil {
+		t.Fatalf("decoding POST /api/endpoints response: %v", err)
+	}
 	resp.Body.Close()
+	if len(afterAdd) != 1 || afterAdd[0].Endpoint != addr || !afterAdd[0].Removable {
+		t.Fatalf("expected one removable endpoint %q, got %+v", addr, afterAdd)
+	}
 
 	// Adding the same endpoint again is rejected.
 	resp, err = http.Post(server.URL+"/api/endpoints", "application/json", bytes.NewReader(body))
@@ -198,6 +217,51 @@ func TestUIEndpointsEndToEnd(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected a probed endpoint row for %s, got %+v", addr, rows)
+	}
+
+	// Removing an endpoint that was never added is rejected.
+	req, _ := http.NewRequest(http.MethodDelete, server.URL+"/api/endpoints/never-added.example.com", nil)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /api/endpoints (unknown): %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 removing an unknown endpoint, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Removing the endpoint that was added takes it out of the list and
+	// out of the next /api/certs response.
+	req, _ = http.NewRequest(http.MethodDelete, server.URL+"/api/endpoints/"+addr, nil)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /api/endpoints: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 removing endpoint, got %d", resp.StatusCode)
+	}
+	var afterRemove []apiEndpointEntry
+	if err := json.NewDecoder(resp.Body).Decode(&afterRemove); err != nil {
+		t.Fatalf("decoding DELETE /api/endpoints response: %v", err)
+	}
+	resp.Body.Close()
+	if len(afterRemove) != 0 {
+		t.Fatalf("expected no endpoints left after removal, got %+v", afterRemove)
+	}
+
+	resp, err = http.Get(server.URL + "/api/certs")
+	if err != nil {
+		t.Fatalf("GET /api/certs (after removal): %v", err)
+	}
+	defer resp.Body.Close()
+	var rowsAfterRemove []apiRow
+	if err := json.NewDecoder(resp.Body).Decode(&rowsAfterRemove); err != nil {
+		t.Fatalf("decoding /api/certs response: %v", err)
+	}
+	for _, r := range rowsAfterRemove {
+		if r.Source == "endpoint" && r.Name == addr {
+			t.Fatalf("expected removed endpoint %s to be gone from /api/certs, got %+v", addr, rowsAfterRemove)
+		}
 	}
 }
 
@@ -523,5 +587,104 @@ func TestUIAddClusterRejectsBadKubeconfigEndToEnd(t *testing.T) {
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400 for invalid kubeconfig upload, got %d", resp.StatusCode)
+	}
+}
+
+// validKubeconfig is a minimal kubeconfig that
+// clientcmd.RESTConfigFromKubeConfig accepts — it's never dialed, since
+// AddUpload only parses it to fail fast on garbage.
+const validKubeconfig = `apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: https://127.0.0.1:6443
+  name: test
+contexts:
+- context:
+    cluster: test
+    user: test
+  name: test
+current-context: test
+users:
+- name: test
+  user:
+    token: fake-token
+`
+
+// TestUIRemoveClusterEndToEnd uploads a cluster through POST /api/clusters,
+// then asserts DELETE /api/clusters/{label} removes it — and that removing
+// a label that was never added is rejected.
+func TestUIRemoveClusterEndToEnd(t *testing.T) {
+	uiHandler, err := ui.Handler()
+	if err != nil {
+		t.Fatalf("ui.Handler: %v", err)
+	}
+	noopCollect := func(ctx context.Context) ([]output.Row, error) { return nil, nil }
+	mux := cmd.NewUIMux(uiHandler, cmd.UIDeps{
+		Collect:   noopCollect,
+		Clusters:  cmd.NewClusterRegistry(),
+		Endpoints: cmd.NewEndpointRegistry(),
+		History:   newTestHistoryStore(t),
+		Settings:  cmd.NewSettings(14, true, ""),
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	part, err := w.CreateFormFile("kubeconfig", "test-cluster.yaml")
+	if err != nil {
+		t.Fatalf("CreateFormFile: %v", err)
+	}
+	if _, err := part.Write([]byte(validKubeconfig)); err != nil {
+		t.Fatalf("writing form file part: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing multipart writer: %v", err)
+	}
+
+	resp, err := http.Post(server.URL+"/api/clusters", w.FormDataContentType(), &buf)
+	if err != nil {
+		t.Fatalf("POST /api/clusters: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 uploading cluster, got %d", resp.StatusCode)
+	}
+	var afterAdd []apiClusterEntry
+	if err := json.NewDecoder(resp.Body).Decode(&afterAdd); err != nil {
+		t.Fatalf("decoding POST /api/clusters response: %v", err)
+	}
+	resp.Body.Close()
+	if len(afterAdd) != 1 || afterAdd[0].Label != "test-cluster.yaml" || !afterAdd[0].Removable {
+		t.Fatalf("expected one removable cluster %q, got %+v", "test-cluster.yaml", afterAdd)
+	}
+
+	// Removing a label that was never added is rejected.
+	req, _ := http.NewRequest(http.MethodDelete, server.URL+"/api/clusters/never-added.yaml", nil)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /api/clusters (unknown): %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 removing an unknown cluster, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Removing the cluster that was added takes it out of the list.
+	req, _ = http.NewRequest(http.MethodDelete, server.URL+"/api/clusters/test-cluster.yaml", nil)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /api/clusters: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 removing cluster, got %d", resp.StatusCode)
+	}
+	var afterRemove []apiClusterEntry
+	if err := json.NewDecoder(resp.Body).Decode(&afterRemove); err != nil {
+		t.Fatalf("decoding DELETE /api/clusters response: %v", err)
+	}
+	resp.Body.Close()
+	if len(afterRemove) != 0 {
+		t.Fatalf("expected no clusters left after removal, got %+v", afterRemove)
 	}
 }
