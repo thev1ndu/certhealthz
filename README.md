@@ -49,7 +49,7 @@ Or build from source:
 go build -o certhealthz .
 ```
 
-The `dashboard` command serves a bundled web UI (see [dashboard/](dashboard/)).
+The `ui` command serves a bundled web UI (see [dashboard/](dashboard/)).
 `go build` alone embeds a placeholder page for it; run `make dashboard-build`
 first to build the real UI and embed it into the binary, then `make build`.
 
@@ -92,24 +92,33 @@ Serve the bundled web dashboard, backed by a live scan — probing endpoints
 alongside your clusters, either at startup or added later from the UI:
 
 ```sh
-certhealthz dashboard --addr :8090 --probe api.example.com
+certhealthz ui --addr :8090 --probe api.example.com
+```
+
+Check Certificate Transparency logs for certs issued for your domains that
+no configured cluster knows about (pass `--kubeconfig` to get the
+known/unknown distinction — otherwise every recent cert is just reported):
+
+```sh
+certhealthz ct example.com --kubeconfig ~/.kube/prod --since 24h
 ```
 
 ## Flags
 
-| Flag                | Applies to               | Description                                                                     |
-| ------------------- | ------------------------ | -------------------------------------------------------------------------------- |
-| `--kubeconfig`      | `scan`, `dashboard`      | repeatable, one per cluster (default: `$KUBECONFIG`/`~/.kube/config`)          |
-| `--warn-days`       | all                      | days-remaining threshold before status flips to `expiring`                     |
-| `--webhook`         | `scan`, `probe`          | POST flagged rows as JSON to this URL                                          |
-| `--prometheus`      | `scan`, `probe`          | print `cert_expiry_days` gauge instead of a table                              |
-| `--include-secrets` | `scan`, `dashboard`      | also scan raw `kubernetes.io/tls` Secrets, for drift detection and Ingress cross-referencing (default `true`) |
-| `--timeout`         | `probe`                  | per-endpoint dial timeout (default `5s`)                                       |
-| `--probe`           | `dashboard`              | repeatable, live TLS endpoint to probe on every scan (also addable from the UI)|
-| `--probe-timeout`   | `dashboard`              | per-endpoint dial timeout for `--probe` endpoints (default `5s`)               |
-| `--record`          | `scan`                   | persist this scan to the history database                                     |
-| `--db`              | `scan`, `history`        | path to the SQLite history database (default `certhealthz-history.db`)         |
-| `--addr`            | `dashboard`              | address to serve the dashboard on (default `:8090`)                            |
+| Flag                | Applies to           | Description                                                                                                    |
+| -------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `--kubeconfig`      | `scan`, `ui`, `ct`   | repeatable, one per cluster (default: `$KUBECONFIG`/`~/.kube/config`)                                          |
+| `--warn-days`       | `scan`, `probe`, `ui`, `ct` | days-remaining threshold before status flips to `expiring`                                              |
+| `--webhook`         | `scan`, `probe`, `ct` | POST flagged rows as JSON to this URL                                                                          |
+| `--prometheus`      | `scan`, `probe`, `ct` | print `cert_expiry_days` gauge instead of a table                                                              |
+| `--include-secrets` | `scan`, `ui`         | also scan raw `kubernetes.io/tls` Secrets, for drift detection and Ingress cross-referencing (default `true`)  |
+| `--timeout`         | `probe`              | per-endpoint dial timeout (default `5s`)                                                                       |
+| `--probe`           | `ui`                 | repeatable, live TLS endpoint to probe on every scan (also addable from the UI)                                |
+| `--probe-timeout`   | `ui`                 | per-endpoint dial timeout for `--probe` endpoints (default `5s`)                                               |
+| `--since`           | `ct`                 | only report CT log entries logged within this window (default `24h`)                                          |
+| `--record`          | `scan`               | persist this scan to the history database                                                                      |
+| `--db`              | `scan`, `history`    | path to the SQLite history database (default `certhealthz-history.db`)                                         |
+| `--addr`            | `ui`                 | address to serve the dashboard on (default `:8090`)                                                            |
 
 ## Status
 
@@ -132,7 +141,7 @@ MVP.
 - [x] historical run diffing (SQLite) — track expiry trend, not just point-in-time snapshot:
       `certhealthz scan --record` persists a run, `certhealthz history diff` reports what
       changed since the previous one.
-- [x] bundled lightweight dashboard: `certhealthz dashboard` serves the React UI in
+- [x] bundled lightweight dashboard: `certhealthz ui` serves the React UI in
       `dashboard/` (embedded via `go:embed`, built with `make dashboard-build`) plus a
       `/api/certs` JSON endpoint backed by a live scan.
 - [x] `goreleaser` for single-binary cross-platform distribution: see `.goreleaser.yaml`
@@ -143,6 +152,10 @@ MVP.
       flagged as an `ingress`-sourced row alongside the normal expiry classification. Gateway API
       (`HTTPRoute`/`Gateway`) isn't covered yet — it's an optional CRD with a different shape, left
       for a follow-up rather than bundled in half-done.
+- [x] Certificate Transparency log monitoring (`certhealthz ct <domain...>`): queries crt.sh for
+      certs recently logged for a domain; with `--kubeconfig` set, cross-checks each result
+      against your clusters' Secret DNS names and flags a domain none of them cover as possible
+      shadow/rogue issuance.
 
 ### Planned
 
@@ -150,7 +163,6 @@ MVP.
 
 - [ ] Gateway API cross-reference: extend the Ingress check above to `HTTPRoute`/`Gateway` (`gateway.networking.k8s.io`)
 - [ ] cloud-managed cert scanning: AWS ACM, GCP Certificate Manager, Azure Key Vault — one report across k8s and cloud
-- [ ] Certificate Transparency log monitoring: catch certs issued for your domains outside any known cluster or cloud account (shadow/rogue issuance)
 - [ ] mTLS client-certificate expiry tracking, not just server certs
 
 **Trust & chain validation**

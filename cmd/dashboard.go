@@ -133,9 +133,10 @@ var (
 )
 
 var dashboardCmd = &cobra.Command{
-	Use:   "dashboard",
-	Short: "Serve the bundled web dashboard, backed by a live scan",
-	RunE:  runDashboard,
+	Use:     "ui",
+	Aliases: []string{"dashboard"},
+	Short:   "Serve the bundled web dashboard, backed by a live scan",
+	RunE:    runDashboard,
 }
 
 func init() {
@@ -368,7 +369,7 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 	}
 	mux := NewDashboardMux(uiHandler, collect, dashboardClusters, dashboardEndpointsRegistry)
 
-	fmt.Printf("certhealthz dashboard listening on %s\n", dashboardAddr)
+	fmt.Printf("certhealthz ui listening on %s\n", dashboardAddr)
 	server := &http.Server{
 		Addr:              dashboardAddr,
 		Handler:           mux,
