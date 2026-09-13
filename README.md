@@ -1,5 +1,11 @@
 # CertHealthz
 
+[![CI](https://github.com/thev1ndu/certhealthz/actions/workflows/ci.yml/badge.svg)](https://github.com/thev1ndu/certhealthz/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/thev1ndu/certhealthz.svg)](https://pkg.go.dev/github.com/thev1ndu/certhealthz)
+[![Go Report Card](https://goreportcard.com/badge/github.com/thev1ndu/certhealthz)](https://goreportcard.com/report/github.com/thev1ndu/certhealthz)
+[![Release](https://img.shields.io/github/v/release/thev1ndu/certhealthz)](https://github.com/thev1ndu/certhealthz/releases)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
 Multi-cluster TLS/certificate expiry radar. Single Go binary, no CRD, no
 in-cluster install — point it at kubeconfigs and/or live endpoints and get
 a unified expiry report.
@@ -118,4 +124,4 @@ MVP.
 
 ## License
 
-MIT
+Apache 2.0
