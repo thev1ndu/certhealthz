@@ -12,22 +12,6 @@ a unified expiry report.
 
 ![CertHealthz dashboard](https://i.postimg.cc/RZCs0rM6/image.png)
 
-| Tool | Cert-manager CR aware | Raw Secret drift check | Live endpoint probe | Multi-cluster | History/trend diff | Dashboard UI | Single binary, no install | Alerting |
-|---|---|---|---|---|---|---|---|---|
-| **CertHealthz** | ✅ | ✅ | ✅ | ✅ | ✅ (SQLite) | ✅ (embedded) | ✅ | ✅ (webhook) |
-| [x509-certificate-exporter](https://github.com/enix/x509-certificate-exporter) | ✅ | ✅ (Secrets scan) | ❌ | ✅ (via Prometheus federation) | ❌ (point-in-time metrics) | ❌ (Grafana-dependent) | ❌ (in-cluster Deployment) | via Alertmanager |
-| [ssl_exporter](https://github.com/ribbybibby/ssl_exporter) | ❌ | ❌ | ✅ | N/A (probes targets, cluster-agnostic) | ❌ | ❌ (Grafana-dependent) | ✅ (binary, but needs Prometheus+Grafana around it) | via Alertmanager |
-| [testssl.sh](https://github.com/drwetter/testssl.sh) | ❌ | ❌ | ✅ (deep TLS/cipher audit) | ❌ | ❌ | ❌ | ✅ (shell script) | ❌ |
-| [sslyze](https://github.com/nabla-c0d3/sslyze) | ❌ | ❌ | ✅ (deep TLS audit) | ❌ | ❌ | ❌ | ✅ (CLI/lib) | ❌ |
-| [Uptime Kuma](https://github.com/louislam/uptime-kuma) | ❌ | ❌ | ✅ (basic expiry check) | ❌ | ❌ (uptime history, not cert trend) | ✅ | ❌ (needs a running server/DB) | ✅ (many channels) |
-| cert-manager itself | ✅ (source of truth) | ❌ | ❌ | per-cluster only | ❌ | ❌ | ❌ (controller, not a query tool) | ❌ |
-
-CertHealthz is the only one that cross-checks cert-manager's `Ready` status
-against the backing Secret's actual leaf cert (catching silent renewal drift)
-while staying a zero-install single binary — the exporters need a
-Prometheus+Grafana stack, Uptime Kuma needs its own server, and
-testssl.sh/sslyze are one-shot scanners with no cluster or history awareness.
-
 ## Why
 
 - cert-manager tracks its own `Certificate` objects, but says nothing about
