@@ -211,13 +211,13 @@ func Apply(path string, newBinary []byte) (backupKept bool, err error) {
 	defer os.Remove(tmpPath) // no-op once the rename below succeeds
 
 	if _, err := tmp.Write(newBinary); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return false, fmt.Errorf("writing new binary: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		return false, fmt.Errorf("writing new binary: %w", err)
 	}
-	if err := os.Chmod(tmpPath, 0o755); err != nil {
+	if err := os.Chmod(tmpPath, 0o755); err != nil { //nolint:gosec // replacing an executable binary; it must stay executable
 		return false, fmt.Errorf("making new binary executable: %w", err)
 	}
 
