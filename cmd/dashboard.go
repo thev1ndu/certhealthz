@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/thev1ndu/certhealthz/pkg/alert"
 	"github.com/thev1ndu/certhealthz/pkg/certmanager"
+	"github.com/thev1ndu/certhealthz/pkg/history"
 	"github.com/thev1ndu/certhealthz/pkg/output"
 	"github.com/thev1ndu/certhealthz/pkg/ui"
 )
@@ -26,12 +28,23 @@ const maxKubeconfigUploadSize = 10 << 20 // 10 MiB
 // one short JSON field, never legitimately more than a few hundred bytes.
 const maxEndpointBodySize = 1 << 10 // 1 KiB
 
+// maxSettingsBodySize bounds the POST /api/settings request body — a
+// handful of short fields.
+const maxSettingsBodySize = 1 << 10 // 1 KiB
+
+// maxCTBodySize bounds the POST /api/ct request body — a list of domains,
+// generous headroom for a few dozen without letting a client force
+// unbounded allocation.
+const maxCTBodySize = 16 << 10 // 16 KiB
+
 var (
 	dashboardAddr         string
 	dashboardWarnDays     int
 	dashboardIncludeRaw   bool
+	dashboardWebhookURL   string
 	dashboardEndpoints    []string
 	dashboardProbeTimeout time.Duration
+	dashboardDBPath       string
 )
 
 // ClusterEntry identifies one cluster the dashboard scans. Kubeconfig is
@@ -127,9 +140,40 @@ func (e *EndpointRegistry) Add(endpoint string) error {
 	return nil
 }
 
+// Settings is the dashboard's live-editable scan configuration. Seeded from
+// --warn-days/--include-secrets/--webhook at startup, mutable at runtime via
+// /api/settings so the UI can change them without a restart. Guarded by a
+// mutex since HTTP handlers run concurrently with collect reading it on
+// every scan.
+type Settings struct {
+	mu             sync.Mutex
+	warnDays       int
+	includeSecrets bool
+	webhookURL     string
+}
+
+// NewSettings returns a Settings seeded with the given initial values, e.g.
+// for tests that don't go through the CLI flag-backed defaults.
+func NewSettings(warnDays int, includeSecrets bool, webhookURL string) *Settings {
+	return &Settings{warnDays: warnDays, includeSecrets: includeSecrets, webhookURL: webhookURL}
+}
+
+func (s *Settings) Get() (warnDays int, includeSecrets bool, webhookURL string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.warnDays, s.includeSecrets, s.webhookURL
+}
+
+func (s *Settings) Set(warnDays int, includeSecrets bool, webhookURL string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.warnDays, s.includeSecrets, s.webhookURL = warnDays, includeSecrets, webhookURL
+}
+
 var (
 	dashboardClusters          = NewClusterRegistry()
 	dashboardEndpointsRegistry = NewEndpointRegistry()
+	dashboardSettings          *Settings
 )
 
 var dashboardCmd = &cobra.Command{
@@ -145,6 +189,8 @@ func init() {
 	dashboardCmd.Flags().BoolVar(&dashboardIncludeRaw, "include-secrets", true, "also scan raw kubernetes.io/tls Secrets, for Certificate drift detection and Ingress cross-referencing")
 	dashboardCmd.Flags().StringSliceVar(&dashboardEndpoints, "probe", nil, "live TLS endpoint (host or host:port) to probe on every scan; repeat flag for multiple")
 	dashboardCmd.Flags().DurationVar(&dashboardProbeTimeout, "probe-timeout", 5*time.Second, "per-endpoint dial timeout for --probe endpoints")
+	dashboardCmd.Flags().StringVar(&dashboardWebhookURL, "webhook", "", "webhook URL to POST flagged rows to; changeable at runtime from the UI")
+	dashboardCmd.Flags().StringVar(&dashboardDBPath, "db", defaultHistoryDBPath, "path to the SQLite history database used by the UI's Record/Diff panel")
 	rootCmd.AddCommand(dashboardCmd)
 }
 
@@ -284,14 +330,236 @@ func handleAddEndpoint(endpoints *EndpointRegistry, w http.ResponseWriter, r *ht
 	}
 }
 
+// apiSettings is the JSON shape of GET/POST /api/settings.
+type apiSettings struct {
+	WarnDays       int    `json:"warnDays"`
+	IncludeSecrets bool   `json:"includeSecrets"`
+	WebhookURL     string `json:"webhookURL"`
+}
+
+func handleSettings(settings *Settings, w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		warnDays, includeSecrets, webhookURL := settings.Get()
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(apiSettings{warnDays, includeSecrets, webhookURL}); err != nil {
+			log.Printf("encoding /api/settings response: %v", err)
+		}
+	case http.MethodPost:
+		var body apiSettings
+		if err := json.NewDecoder(io.LimitReader(r.Body, maxSettingsBodySize)).Decode(&body); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if body.WarnDays <= 0 {
+			http.Error(w, "warnDays must be positive", http.StatusBadRequest)
+			return
+		}
+		settings.Set(body.WarnDays, body.IncludeSecrets, strings.TrimSpace(body.WebhookURL))
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(body); err != nil {
+			log.Printf("encoding /api/settings response: %v", err)
+		}
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// apiAlertResult is the JSON shape of POST /api/alert.
+type apiAlertResult struct {
+	Flagged int  `json:"flagged"`
+	Sent    bool `json:"sent"`
+}
+
+func handleAlert(collect func(context.Context) ([]output.Row, error), settings *Settings, w http.ResponseWriter, r *http.Request) {
+	_, _, webhookURL := settings.Get()
+	if webhookURL == "" {
+		http.Error(w, "no webhook URL configured — set one in settings first", http.StatusBadRequest)
+		return
+	}
+
+	rows, err := collect(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	flagged := alert.Flagged(rows)
+	sent := false
+	if len(flagged) > 0 {
+		if err := alert.Send(webhookURL, rows); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		sent = true
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(apiAlertResult{Flagged: len(flagged), Sent: sent}); err != nil {
+		log.Printf("encoding /api/alert response: %v", err)
+	}
+}
+
+// apiChange is the JSON shape of one entry in GET /api/history/diff.
+type apiChange struct {
+	Kind      string `json:"kind"`
+	Source    string `json:"source"`
+	Cluster   string `json:"cluster"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	FromDays  *int   `json:"fromDays"`
+	ToDays    *int   `json:"toDays"`
+	FromState string `json:"fromState"`
+	ToState   string `json:"toState"`
+}
+
+// apiDiff is the JSON shape of GET /api/history/diff.
+type apiDiff struct {
+	LatestAt   *string     `json:"latestAt"`
+	PreviousAt *string     `json:"previousAt"`
+	Changes    []apiChange `json:"changes"`
+	Message    string      `json:"message,omitempty"`
+}
+
+func handleHistoryRecord(collect func(context.Context) ([]output.Row, error), store *history.Store, w http.ResponseWriter, r *http.Request) {
+	rows, err := collect(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	runID, err := store.RecordRun(rows)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"runId": runID}); err != nil {
+		log.Printf("encoding /api/history/record response: %v", err)
+	}
+}
+
+func handleHistoryDiff(store *history.Store, w http.ResponseWriter, _ *http.Request) {
+	latest, previous, latestAt, previousAt, err := store.LastTwoRuns()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	resp := apiDiff{}
+	switch {
+	case latest == nil:
+		resp.Message = "no recorded runs yet — click Record to take a snapshot"
+	case previous == nil:
+		at := latestAt.UTC().Format(time.RFC3339)
+		resp.LatestAt = &at
+		resp.Message = "only one recorded run so far — nothing to diff against yet"
+	default:
+		latestStr := latestAt.UTC().Format(time.RFC3339)
+		previousStr := previousAt.UTC().Format(time.RFC3339)
+		resp.LatestAt = &latestStr
+		resp.PreviousAt = &previousStr
+		for _, c := range history.Diff(latest, previous) {
+			resp.Changes = append(resp.Changes, apiChange{
+				Kind:      c.Kind,
+				Source:    c.Identity.Source,
+				Cluster:   c.Identity.Cluster,
+				Namespace: c.Identity.Namespace,
+				Name:      c.Identity.Name,
+				FromDays:  c.FromDays,
+				ToDays:    c.ToDays,
+				FromState: c.FromState,
+				ToState:   c.ToState,
+			})
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("encoding /api/history/diff response: %v", err)
+	}
+}
+
+// dashboardKnownDNSNames flattens the DNS names on every kubernetes.io/tls
+// Secret across every configured dashboard cluster (startup --kubeconfig
+// and uploads alike), so a CT check can tell known from unknown against
+// what's actually deployed here — the cmd/ct.go CLI variant only walks the
+// raw --kubeconfig path list, which uploaded clusters aren't part of.
+func dashboardKnownDNSNames(ctx context.Context, clusters *ClusterRegistry) []string {
+	var names []string
+	for _, e := range clusters.All() {
+		label := e.Label
+		if label == "" {
+			label = "default"
+		}
+		cc, err := buildClusterClients(label, e.Kubeconfig, e.Label, true)
+		if err != nil {
+			log.Printf("building client for %s: %v", label, err)
+			continue
+		}
+		secrets, err := certmanager.ScanSecrets(ctx, label, cc.Typed)
+		if err != nil {
+			log.Printf("scanning secrets on %s: %v", label, err)
+			continue
+		}
+		for _, s := range secrets {
+			names = append(names, s.DNSNames...)
+		}
+	}
+	return names
+}
+
+func handleCT(clusters *ClusterRegistry, settings *Settings, w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Domains []string `json:"domains"`
+		Since   string   `json:"since"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxCTBodySize)).Decode(&body); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(body.Domains) == 0 {
+		http.Error(w, "at least one domain is required", http.StatusBadRequest)
+		return
+	}
+
+	since := 24 * time.Hour
+	if body.Since != "" {
+		d, err := time.ParseDuration(body.Since)
+		if err != nil {
+			http.Error(w, "invalid since duration", http.StatusBadRequest)
+			return
+		}
+		since = d
+	}
+
+	warnDays, _, _ := settings.Get()
+	known := dashboardKnownDNSNames(r.Context(), clusters)
+	rows := ctRows(r.Context(), body.Domains, since, warnDays, known)
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(toAPIRows(rows)); err != nil {
+		log.Printf("encoding /api/ct response: %v", err)
+	}
+}
+
+// DashboardDeps bundles NewDashboardMux's dependencies so its constructor
+// doesn't grow an ever-longer positional parameter list as the dashboard's
+// API surface grows.
+type DashboardDeps struct {
+	Collect   func(context.Context) ([]output.Row, error)
+	Clusters  *ClusterRegistry
+	Endpoints *EndpointRegistry
+	History   *history.Store
+	Settings  *Settings
+}
+
 // NewDashboardMux builds the dashboard's HTTP routing: the embedded UI plus
-// the /api/certs, /api/clusters, and /api/endpoints endpoints. collect is
-// injected so tests can back /api/certs with fake clientsets instead of a
-// real cluster.
-func NewDashboardMux(uiHandler http.Handler, collect func(context.Context) ([]output.Row, error), clusters *ClusterRegistry, endpoints *EndpointRegistry) *http.ServeMux {
+// the /api/certs, /api/clusters, /api/endpoints, /api/settings, /api/alert,
+// /api/history/record, /api/history/diff, and /api/ct endpoints.
+func NewDashboardMux(uiHandler http.Handler, deps DashboardDeps) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/certs", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := collect(r.Context())
+		rows, err := deps.Collect(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -305,11 +573,11 @@ func NewDashboardMux(uiHandler http.Handler, collect func(context.Context) ([]ou
 		switch r.Method {
 		case http.MethodGet:
 			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(clusterLabels(clusters.All())); err != nil {
+			if err := json.NewEncoder(w).Encode(clusterLabels(deps.Clusters.All())); err != nil {
 				log.Printf("encoding /api/clusters response: %v", err)
 			}
 		case http.MethodPost:
-			handleAddCluster(clusters, w, r)
+			handleAddCluster(deps.Clusters, w, r)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -318,14 +586,45 @@ func NewDashboardMux(uiHandler http.Handler, collect func(context.Context) ([]ou
 		switch r.Method {
 		case http.MethodGet:
 			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(endpoints.All()); err != nil {
+			if err := json.NewEncoder(w).Encode(deps.Endpoints.All()); err != nil {
 				log.Printf("encoding /api/endpoints response: %v", err)
 			}
 		case http.MethodPost:
-			handleAddEndpoint(endpoints, w, r)
+			handleAddEndpoint(deps.Endpoints, w, r)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+	})
+	mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
+		handleSettings(deps.Settings, w, r)
+	})
+	mux.HandleFunc("/api/alert", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		handleAlert(deps.Collect, deps.Settings, w, r)
+	})
+	mux.HandleFunc("/api/history/record", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		handleHistoryRecord(deps.Collect, deps.History, w, r)
+	})
+	mux.HandleFunc("/api/history/diff", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		handleHistoryDiff(deps.History, w, r)
+	})
+	mux.HandleFunc("/api/ct", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		handleCT(deps.Clusters, deps.Settings, w, r)
 	})
 	mux.Handle("/", uiHandler)
 	return mux
@@ -337,7 +636,17 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("loading embedded dashboard: %w", err)
 	}
 
+	dashboardSettings = NewSettings(dashboardWarnDays, dashboardIncludeRaw, dashboardWebhookURL)
+
+	store, err := history.Open(dashboardDBPath)
+	if err != nil {
+		return fmt.Errorf("opening history database: %w", err)
+	}
+	defer store.Close()
+
 	collect := func(ctx context.Context) ([]output.Row, error) {
+		warnDays, includeSecrets, _ := dashboardSettings.Get()
+
 		entries := dashboardClusters.All()
 		if len(entries) == 0 {
 			entries = []ClusterEntry{{}} // empty label => default loading rules
@@ -349,25 +658,31 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 			if label == "" {
 				label = "default"
 			}
-			cc, err := buildClusterClients(label, e.Kubeconfig, e.Label, dashboardIncludeRaw)
+			cc, err := buildClusterClients(label, e.Kubeconfig, e.Label, includeSecrets)
 			if err != nil {
 				return nil, err
 			}
 			clients = append(clients, cc)
 		}
 
-		rows, err := CollectRowsFromClients(ctx, clients, dashboardWarnDays, dashboardIncludeRaw)
+		rows, err := CollectRowsFromClients(ctx, clients, warnDays, includeSecrets)
 		if err != nil {
 			return nil, err
 		}
 
 		if endpoints := dashboardEndpointsRegistry.All(); len(endpoints) > 0 {
-			rows = append(rows, probeRows(endpoints, dashboardProbeTimeout, dashboardWarnDays)...)
+			rows = append(rows, probeRows(endpoints, dashboardProbeTimeout, warnDays)...)
 			output.Sort(rows)
 		}
 		return rows, nil
 	}
-	mux := NewDashboardMux(uiHandler, collect, dashboardClusters, dashboardEndpointsRegistry)
+	mux := NewDashboardMux(uiHandler, DashboardDeps{
+		Collect:   collect,
+		Clusters:  dashboardClusters,
+		Endpoints: dashboardEndpointsRegistry,
+		History:   store,
+		Settings:  dashboardSettings,
+	})
 
 	fmt.Printf("certhealthz ui listening on %s\n", dashboardAddr)
 	server := &http.Server{

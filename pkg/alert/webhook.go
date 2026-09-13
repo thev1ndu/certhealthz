@@ -18,16 +18,22 @@ type Payload struct {
 	Rows      []output.Row `json:"certificates"`
 }
 
-// Send posts every row with status "expiring" or "expired" to the given
-// webhook URL as a single JSON payload. Returns early with nil if there's
-// nothing to alert on.
-func Send(url string, rows []output.Row) error {
+// Flagged returns every row whose status warrants attention: expiring,
+// expired, an outright scan error, or drift.
+func Flagged(rows []output.Row) []output.Row {
 	var flagged []output.Row
 	for _, r := range rows {
 		if r.Status == "expiring" || r.Status == "expired" || r.Status == "error" || r.Status == "drift" {
 			flagged = append(flagged, r)
 		}
 	}
+	return flagged
+}
+
+// Send posts every flagged row to the given webhook URL as a single JSON
+// payload. Returns early with nil if there's nothing to alert on.
+func Send(url string, rows []output.Row) error {
+	flagged := Flagged(rows)
 	if len(flagged) == 0 {
 		return nil
 	}

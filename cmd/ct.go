@@ -68,10 +68,13 @@ func knownDNSNames(ctx context.Context) []string {
 	return names
 }
 
-func runCT(cmd *cobra.Command, domains []string) error {
-	ctx := cmd.Context()
-	known := knownDNSNames(ctx)
-	cutoff := time.Now().Add(-ctSince)
+// ctRows queries CT logs for each domain and converts the results into
+// rows, sorted and classified. known is the flattened DNS names of Secrets
+// the caller already trusts (from knownDNSNames or its dashboard
+// equivalent); a nil/empty known skips the known/unknown check entirely and
+// every result is just classified by its real expiry.
+func ctRows(ctx context.Context, domains []string, since time.Duration, warnDays int, known []string) []output.Row {
+	cutoff := time.Now().Add(-since)
 
 	var rows []output.Row
 	for _, domain := range domains {
@@ -102,13 +105,20 @@ func runCT(cmd *cobra.Command, domains []string) error {
 				)
 			} else {
 				row.Detail = fmt.Sprintf("issuer: %s, logged %s", e.Issuer, e.NotBefore.Format(time.RFC3339))
-				row = output.Classify(row, ctWarnDays)
+				row = output.Classify(row, warnDays)
 			}
 			rows = append(rows, row)
 		}
 	}
 
 	output.Sort(rows)
+	return rows
+}
+
+func runCT(cmd *cobra.Command, domains []string) error {
+	ctx := cmd.Context()
+	known := knownDNSNames(ctx)
+	rows := ctRows(ctx, domains, ctSince, ctWarnDays, known)
 
 	if ctPrometheus {
 		output.Prometheus(os.Stdout, rows)

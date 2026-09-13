@@ -108,16 +108,16 @@ certhealthz ct example.com --kubeconfig ~/.kube/prod --since 24h
 | Flag                | Applies to           | Description                                                                                                    |
 | -------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `--kubeconfig`      | `scan`, `ui`, `ct`   | repeatable, one per cluster (default: `$KUBECONFIG`/`~/.kube/config`)                                          |
-| `--warn-days`       | `scan`, `probe`, `ui`, `ct` | days-remaining threshold before status flips to `expiring`                                              |
-| `--webhook`         | `scan`, `probe`, `ct` | POST flagged rows as JSON to this URL                                                                          |
+| `--warn-days`       | `scan`, `probe`, `ui`, `ct` | days-remaining threshold before status flips to `expiring` (`ui`: changeable at runtime from Settings) |
+| `--webhook`         | `scan`, `probe`, `ui`, `ct` | POST flagged rows as JSON to this URL (`ui`: changeable at runtime from Settings, with a "Send test alert" button) |
 | `--prometheus`      | `scan`, `probe`, `ct` | print `cert_expiry_days` gauge instead of a table                                                              |
-| `--include-secrets` | `scan`, `ui`         | also scan raw `kubernetes.io/tls` Secrets, for drift detection and Ingress cross-referencing (default `true`)  |
+| `--include-secrets` | `scan`, `ui`         | also scan raw `kubernetes.io/tls` Secrets, for drift detection and Ingress cross-referencing (default `true`, changeable at runtime from Settings) |
 | `--timeout`         | `probe`              | per-endpoint dial timeout (default `5s`)                                                                       |
 | `--probe`           | `ui`                 | repeatable, live TLS endpoint to probe on every scan (also addable from the UI)                                |
 | `--probe-timeout`   | `ui`                 | per-endpoint dial timeout for `--probe` endpoints (default `5s`)                                               |
-| `--since`           | `ct`                 | only report CT log entries logged within this window (default `24h`)                                          |
+| `--since`           | `ct`                 | only report CT log entries logged within this window (default `24h`; the UI's CT panel offers the same choices) |
 | `--record`          | `scan`               | persist this scan to the history database                                                                      |
-| `--db`              | `scan`, `history`    | path to the SQLite history database (default `certhealthz-history.db`)                                         |
+| `--db`              | `scan`, `history`, `ui` | path to the SQLite history database (default `certhealthz-history.db`; `ui` uses it for the History panel's Record/Diff) |
 | `--addr`            | `ui`                 | address to serve the dashboard on (default `:8090`)                                                            |
 
 ## Status
@@ -156,6 +156,15 @@ MVP.
       certs recently logged for a domain; with `--kubeconfig` set, cross-checks each result
       against your clusters' Secret DNS names and flags a domain none of them cover as possible
       shadow/rogue issuance.
+- [x] full UI parity with the CLI — nothing is CLI-only anymore:
+      a **Settings** panel makes `--warn-days`, `--include-secrets`, and the webhook URL
+      live-editable (no restart), with a "Send test alert now" button (`POST /api/alert`) that
+      posts the current flagged rows through `pkg/alert.Send`; a **History** panel records a
+      snapshot and shows the diff since the last one (`POST /api/history/record`,
+      `GET /api/history/diff`, backed by the same `--db` SQLite store `history diff` uses); and a
+      **Check CT logs** panel runs the same Certificate Transparency check as `certhealthz ct`
+      (`POST /api/ct`), cross-referenced against every configured dashboard cluster (startup
+      `--kubeconfig` and uploads alike), not just the CLI's flat `--kubeconfig` list.
 
 ### Planned
 

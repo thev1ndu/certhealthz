@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Badge,
   Button,
+  Checkbox,
   DropdownMenu,
   Input,
   InputGroup,
@@ -13,6 +14,7 @@ import {
   TooltipProvider,
 } from "@cloudflare/kumo";
 import {
+  ClockCounterClockwiseIcon,
   CloudArrowUpIcon,
   DownloadSimpleIcon,
   FileXIcon,
@@ -21,6 +23,7 @@ import {
   MagnifyingGlassIcon,
   PlugsConnectedIcon,
   PlusIcon,
+  ShieldCheckIcon,
   XIcon,
 } from "@phosphor-icons/react";
 import CertTable, { STATUS_BADGE, STATUS_LABEL } from "./components/CertTable";
@@ -140,6 +143,121 @@ export default function App() {
       })
       .catch((err) => setAddEndpointError(String(err.message || err)))
       .finally(() => setAddEndpointBusy(false));
+  }
+
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsForm, setSettingsForm] = useState({
+    warnDays: 14,
+    includeSecrets: true,
+    webhookURL: "",
+  });
+  const [settingsError, setSettingsError] = useState("");
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [alertResult, setAlertResult] = useState(null);
+  const [alertBusy, setAlertBusy] = useState(false);
+
+  useEffect(() => {
+    if (!isLive) return;
+    fetch("/api/settings")
+      .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
+      .then((data) => setSettingsForm(data))
+      .catch(() => {
+        // settings just keeps its defaults if this fails
+      });
+  }, [isLive]);
+
+  function submitSettings() {
+    setSettingsBusy(true);
+    setSettingsError("");
+    fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settingsForm),
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(await res.text());
+        return res.json();
+      })
+      .then((data) => {
+        setSettingsForm(data);
+        return reloadCerts();
+      })
+      .catch((err) => setSettingsError(String(err.message || err)))
+      .finally(() => setSettingsBusy(false));
+  }
+
+  function sendTestAlert() {
+    setAlertBusy(true);
+    setAlertResult(null);
+    fetch("/api/alert", { method: "POST" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(await res.text());
+        return res.json();
+      })
+      .then((data) => setAlertResult(data))
+      .catch((err) => setAlertResult({ error: String(err.message || err) }))
+      .finally(() => setAlertBusy(false));
+  }
+
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyDiff, setHistoryDiff] = useState(null);
+  const [historyError, setHistoryError] = useState("");
+  const [historyBusy, setHistoryBusy] = useState(false);
+
+  function fetchHistoryDiff() {
+    setHistoryBusy(true);
+    setHistoryError("");
+    fetch("/api/history/diff")
+      .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
+      .then((data) => setHistoryDiff(data))
+      .catch((err) => setHistoryError(String(err.message || err)))
+      .finally(() => setHistoryBusy(false));
+  }
+
+  function recordSnapshot() {
+    setHistoryBusy(true);
+    setHistoryError("");
+    fetch("/api/history/record", { method: "POST" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(await res.text());
+        return fetchHistoryDiff();
+      })
+      .catch((err) => {
+        setHistoryError(String(err.message || err));
+        setHistoryBusy(false);
+      });
+  }
+
+  const [ctOpen, setCtOpen] = useState(false);
+  const [ctDomains, setCtDomains] = useState("");
+  const [ctSince, setCtSince] = useState("24h");
+  const [ctResults, setCtResults] = useState(null);
+  const [ctError, setCtError] = useState("");
+  const [ctBusy, setCtBusy] = useState(false);
+
+  function submitCTCheck() {
+    const domains = ctDomains
+      .split(/[,\n]/)
+      .map((d) => d.trim())
+      .filter(Boolean);
+    if (domains.length === 0) {
+      setCtError("Enter at least one domain");
+      return;
+    }
+    setCtBusy(true);
+    setCtError("");
+    fetch("/api/ct", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domains, since: ctSince }),
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(await res.text());
+        return res.json();
+      })
+      .then((data) => setCtResults(data))
+      .catch((err) => setCtError(String(err.message || err)))
+      .finally(() => setCtBusy(false));
   }
 
   const rows = useMemo(
@@ -282,13 +400,157 @@ export default function App() {
                 )}
               </DropdownMenu.Content>
             </DropdownMenu>
-            <Tooltip content="No backend wired up in this preview">
-              <Toolbar.Button
-                icon={GearSixIcon}
-                aria-label="Display options"
-                disabled
-              />
-            </Tooltip>
+            {isLive ? (
+              <Popover
+                open={settingsOpen}
+                onOpenChange={(open) => {
+                  setSettingsOpen(open);
+                  if (open) {
+                    setAlertResult(null);
+                    setSettingsError("");
+                  }
+                }}
+              >
+                <Popover.Trigger
+                  render={(p) => (
+                    <Toolbar.Button
+                      {...p}
+                      icon={GearSixIcon}
+                      aria-label="Settings"
+                    />
+                  )}
+                />
+                <Popover.Content className="w-96 p-6">
+                  <div className="mb-4 flex items-start justify-between gap-4">
+                    <Popover.Title className="text-lg font-semibold">
+                      Settings
+                    </Popover.Title>
+                    <Popover.Close
+                      aria-label="Close"
+                      render={(p) => (
+                        <Button
+                          {...p}
+                          variant="secondary"
+                          shape="square"
+                          icon={<XIcon />}
+                          aria-label="Close"
+                        />
+                      )}
+                    />
+                  </div>
+                  <Popover.Description className="mb-4 text-kumo-subtle">
+                    Change scan thresholds and alerting without restarting
+                    the server.
+                  </Popover.Description>
+
+                  <div className="flex flex-col gap-3">
+                    <label className="flex flex-col gap-1">
+                      <Text as="span" size="sm">
+                        Warn days
+                      </Text>
+                      <Input
+                        type="number"
+                        min={1}
+                        value={settingsForm.warnDays}
+                        onChange={(e) =>
+                          setSettingsForm((prev) => ({
+                            ...prev,
+                            warnDays: Number(e.target.value),
+                          }))
+                        }
+                      />
+                    </label>
+
+                    <label className="flex items-center gap-2">
+                      <Checkbox
+                        checked={settingsForm.includeSecrets}
+                        onCheckedChange={(checked) =>
+                          setSettingsForm((prev) => ({
+                            ...prev,
+                            includeSecrets: checked,
+                          }))
+                        }
+                      />
+                      <Text as="span" size="sm">
+                        Scan raw Secrets (drift detection, Ingress
+                        cross-referencing)
+                      </Text>
+                    </label>
+
+                    <label className="flex flex-col gap-1">
+                      <Text as="span" size="sm">
+                        Webhook URL
+                      </Text>
+                      <Input
+                        placeholder="https://hooks.example.com/certhealthz"
+                        value={settingsForm.webhookURL}
+                        onChange={(e) =>
+                          setSettingsForm((prev) => ({
+                            ...prev,
+                            webhookURL: e.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                  </div>
+
+                  {settingsError && (
+                    <Text variant="error" size="sm" className="mt-2 block">
+                      {settingsError}
+                    </Text>
+                  )}
+
+                  <div className="mt-4 flex items-center justify-between gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={sendTestAlert}
+                      disabled={alertBusy || !settingsForm.webhookURL?.trim()}
+                    >
+                      {alertBusy ? "Sending…" : "Send test alert"}
+                    </Button>
+                    <div className="flex gap-2">
+                      <Popover.Close
+                        render={(p) => (
+                          <Button {...p} variant="secondary">
+                            Close
+                          </Button>
+                        )}
+                      />
+                      <Button
+                        variant="primary"
+                        onClick={submitSettings}
+                        disabled={settingsBusy}
+                      >
+                        {settingsBusy ? "Saving…" : "Save"}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {alertResult && (
+                    <Text
+                      as="p"
+                      size="sm"
+                      variant={alertResult.error ? "error" : "secondary"}
+                      className="mt-2"
+                    >
+                      {alertResult.error
+                        ? alertResult.error
+                        : alertResult.sent
+                          ? `Sent — ${alertResult.flagged} flagged certificate(s).`
+                          : "Nothing to send — 0 flagged certificates."}
+                    </Text>
+                  )}
+                </Popover.Content>
+              </Popover>
+            ) : (
+              <Tooltip content="No backend wired up in this preview">
+                <Toolbar.Button
+                  icon={GearSixIcon}
+                  aria-label="Display options"
+                  disabled
+                />
+              </Tooltip>
+            )}
             <Toolbar.Button
               icon={DownloadSimpleIcon}
               onClick={exportJson}
@@ -512,6 +774,280 @@ export default function App() {
             <Tooltip content="No backend wired up in this preview">
               <Button variant="secondary" icon={PlugsConnectedIcon} disabled>
                 Add endpoint
+              </Button>
+            </Tooltip>
+          )}
+          {isLive ? (
+            <Popover
+              open={historyOpen}
+              onOpenChange={(open) => {
+                setHistoryOpen(open);
+                if (open) fetchHistoryDiff();
+              }}
+            >
+              <Popover.Trigger
+                render={(p) => (
+                  <Button
+                    {...p}
+                    variant="secondary"
+                    icon={ClockCounterClockwiseIcon}
+                  >
+                    History
+                  </Button>
+                )}
+              />
+              <Popover.Content className="w-[28rem] p-6">
+                <div className="mb-4 flex items-start justify-between gap-4">
+                  <Popover.Title className="text-lg font-semibold">
+                    History
+                  </Popover.Title>
+                  <Popover.Close
+                    aria-label="Close"
+                    render={(p) => (
+                      <Button
+                        {...p}
+                        variant="secondary"
+                        shape="square"
+                        icon={<XIcon />}
+                        aria-label="Close"
+                      />
+                    )}
+                  />
+                </div>
+                <Popover.Description className="mb-4 text-kumo-subtle">
+                  Record a snapshot of the current scan, and see what
+                  changed since the last one.
+                </Popover.Description>
+
+                <Button
+                  variant="primary"
+                  onClick={recordSnapshot}
+                  disabled={historyBusy}
+                >
+                  {historyBusy ? "Working…" : "Record snapshot"}
+                </Button>
+
+                {historyError && (
+                  <Text variant="error" size="sm" className="mt-2 block">
+                    {historyError}
+                  </Text>
+                )}
+
+                {historyDiff && (
+                  <div className="mt-4">
+                    {historyDiff.message && (
+                      <Text
+                        as="p"
+                        variant="secondary"
+                        size="sm"
+                        className="mb-2"
+                      >
+                        {historyDiff.message}
+                      </Text>
+                    )}
+                    {historyDiff.changes?.length > 0 && (
+                      <div className="max-h-64 overflow-y-auto rounded-lg border border-kumo-line">
+                        <table className="w-full text-left text-xs">
+                          <thead>
+                            <tr className="border-b border-kumo-line">
+                              <th className="px-2 py-1.5 font-medium">
+                                Change
+                              </th>
+                              <th className="px-2 py-1.5 font-medium">
+                                Name
+                              </th>
+                              <th className="px-2 py-1.5 font-medium">
+                                From
+                              </th>
+                              <th className="px-2 py-1.5 font-medium">To</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {historyDiff.changes.map((c, i) => (
+                              <tr
+                                key={i}
+                                className="border-b border-kumo-line last:border-0"
+                              >
+                                <td className="px-2 py-1.5">{c.kind}</td>
+                                <td className="px-2 py-1.5 truncate">
+                                  {c.name}
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  {c.fromState || "—"}
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  {c.toState || "—"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </Popover.Content>
+            </Popover>
+          ) : (
+            <Tooltip content="No backend wired up in this preview">
+              <Button variant="secondary" icon={ClockCounterClockwiseIcon} disabled>
+                History
+              </Button>
+            </Tooltip>
+          )}
+          {isLive ? (
+            <Popover
+              open={ctOpen}
+              onOpenChange={(open) => {
+                setCtOpen(open);
+                if (open) {
+                  setCtError("");
+                  setCtResults(null);
+                }
+              }}
+            >
+              <Popover.Trigger
+                render={(p) => (
+                  <Button {...p} variant="secondary" icon={ShieldCheckIcon}>
+                    Check CT logs
+                  </Button>
+                )}
+              />
+              <Popover.Content className="w-[28rem] p-6">
+                <div className="mb-4 flex items-start justify-between gap-4">
+                  <Popover.Title className="text-lg font-semibold">
+                    Check Certificate Transparency logs
+                  </Popover.Title>
+                  <Popover.Close
+                    aria-label="Close"
+                    render={(p) => (
+                      <Button
+                        {...p}
+                        variant="secondary"
+                        shape="square"
+                        icon={<XIcon />}
+                        aria-label="Close"
+                      />
+                    )}
+                  />
+                </div>
+                <Popover.Description className="mb-4 text-kumo-subtle">
+                  Find certs recently logged for your domains that none of
+                  your configured clusters' Secrets cover — possible
+                  shadow/rogue issuance.
+                </Popover.Description>
+
+                <div className="flex flex-col gap-3">
+                  <label className="flex flex-col gap-1">
+                    <Text as="span" size="sm">
+                      Domains (comma or newline separated)
+                    </Text>
+                    <textarea
+                      className="min-h-16 rounded-lg border border-kumo-line bg-kumo-base p-2 text-sm"
+                      placeholder="example.com, api.example.com"
+                      value={ctDomains}
+                      onChange={(e) => setCtDomains(e.target.value)}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <Text as="span" size="sm">
+                      Since
+                    </Text>
+                    <select
+                      className="rounded-lg border border-kumo-line bg-kumo-base p-2 text-sm"
+                      value={ctSince}
+                      onChange={(e) => setCtSince(e.target.value)}
+                    >
+                      <option value="1h">Last hour</option>
+                      <option value="24h">Last 24 hours</option>
+                      <option value="168h">Last 7 days</option>
+                      <option value="720h">Last 30 days</option>
+                    </select>
+                  </label>
+                </div>
+
+                {ctError && (
+                  <Text variant="error" size="sm" className="mt-2 block">
+                    {ctError}
+                  </Text>
+                )}
+
+                <div className="mt-4 flex justify-end gap-2">
+                  <Popover.Close
+                    render={(p) => (
+                      <Button {...p} variant="secondary">
+                        Close
+                      </Button>
+                    )}
+                  />
+                  <Button
+                    variant="primary"
+                    onClick={submitCTCheck}
+                    disabled={ctBusy || !ctDomains.trim()}
+                  >
+                    {ctBusy ? "Checking…" : "Check"}
+                  </Button>
+                </div>
+
+                {ctResults && (
+                  <div className="mt-4">
+                    {ctResults.length === 0 ? (
+                      <Text as="p" variant="secondary" size="sm">
+                        No certs logged in that window.
+                      </Text>
+                    ) : (
+                      <div className="max-h-64 overflow-y-auto rounded-lg border border-kumo-line">
+                        <table className="w-full text-left text-xs">
+                          <thead>
+                            <tr className="border-b border-kumo-line">
+                              <th className="px-2 py-1.5 font-medium">
+                                Name
+                              </th>
+                              <th className="px-2 py-1.5 font-medium">
+                                Status
+                              </th>
+                              <th className="px-2 py-1.5 font-medium">
+                                Detail
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {ctResults.map((r) => (
+                              <tr
+                                key={r.id}
+                                className="border-b border-kumo-line last:border-0"
+                              >
+                                <td className="px-2 py-1.5 truncate">
+                                  {r.name}
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  <Badge
+                                    variant={STATUS_BADGE[r.status]}
+                                    appearance="dot"
+                                  >
+                                    {STATUS_LABEL[r.status]}
+                                  </Badge>
+                                </td>
+                                <td
+                                  className="max-w-56 truncate px-2 py-1.5"
+                                  title={r.detail}
+                                >
+                                  {r.detail}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </Popover.Content>
+            </Popover>
+          ) : (
+            <Tooltip content="No backend wired up in this preview">
+              <Button variant="secondary" icon={ShieldCheckIcon} disabled>
+                Check CT logs
               </Button>
             </Tooltip>
           )}

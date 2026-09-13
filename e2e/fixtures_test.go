@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"path/filepath"
+
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,6 +31,8 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes"
 	kubernetesfake "k8s.io/client-go/kubernetes/fake"
+
+	"github.com/thev1ndu/certhealthz/pkg/history"
 )
 
 var certGVR = schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "certificates"}
@@ -191,6 +195,19 @@ func newIngress(namespace, name, secretName string, hosts ...string) *networking
 			},
 		},
 	}
+}
+
+// newTestHistoryStore opens a history.Store backed by a temp file, closed
+// automatically at test cleanup — in place of the real --db-backed store
+// runDashboard opens.
+func newTestHistoryStore(t testing.TB) *history.Store {
+	t.Helper()
+	store, err := history.Open(filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("opening test history store: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return store
 }
 
 // startTLSServer listens on 127.0.0.1 with the given certificate and
