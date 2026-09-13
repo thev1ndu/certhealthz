@@ -79,14 +79,32 @@ Move `certhealthz.exe` into a directory on your `PATH`, or run it in place:
 
 ## 4. Updating to a newer release
 
-certhealthz doesn't have a `--version` flag yet, so there's no in-binary way
-to check what you're running — compare the tag you downloaded against the
-[latest release](https://github.com/thev1ndu/certhealthz/releases/latest).
+Check what you're running:
 
-To update: repeat steps 1–3 with the new release's assets, and replace the
-old binary at the same path (`/usr/local/bin/certhealthz`, or wherever you
-put `certhealthz.exe`). There's no separate uninstall/migration step —
-overwriting the binary is the entire upgrade.
+```sh
+certhealthz --version
+```
 
-If you installed via `go install github.com/thev1ndu/certhealthz@latest`
-instead, updating is just re-running that command.
+Then update in place:
+
+```sh
+certhealthz update           # check, confirm, and install
+certhealthz update --check   # just report whether an update is available
+certhealthz update -y        # skip the confirmation prompt
+```
+
+`update` fetches the [latest release](https://github.com/thev1ndu/certhealthz/releases/latest),
+downloads the asset matching your OS/arch, verifies it against
+`checksums.txt`, and replaces the running binary in place — the same binary
+this guide's steps 1–3 install manually, so there's no separate
+uninstall/migration step. The old binary is kept as `<path>.old` until it
+can be removed (immediately on macOS/Linux; after you next restart the
+process on Windows, since it can't delete a binary that's still running).
+
+You can still update manually instead: repeat steps 1–3 with the new
+release's assets, and overwrite the old binary at the same path.
+
+If you installed via `go install github.com/thev1ndu/certhealthz@latest`,
+updating is just re-running that command — `certhealthz update` also works
+for that install path (it replaces whatever binary is currently running),
+but won't keep the Go module cache in sync with it.

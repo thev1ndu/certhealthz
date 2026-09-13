@@ -6,9 +6,15 @@ import (
 
 var kubeconfigPaths []string
 
+// Version is the certhealthz release version. Overridden at build time via
+// -ldflags "-X github.com/thev1ndu/certhealthz/cmd.Version=vX.Y.Z" (see
+// .goreleaser.yaml); a source build or `go run` keeps the "dev" default.
+var Version = "dev"
+
 var rootCmd = &cobra.Command{
-	Use:   "certhealthz",
-	Short: "certhealthz — multi-cluster TLS/cert-manager expiry radar",
+	Use:     "certhealthz",
+	Short:   "CertHealthz - Live TLS certificate health across clusters",
+	Version: Version,
 	Long: `certhealthz scans cert-manager Certificates, raw kubernetes.io/tls Secrets,
 and live TLS endpoints across one or more clusters, and reports certificates
 approaching expiry or in a broken renewal state.`,
