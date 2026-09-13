@@ -10,19 +10,7 @@ Multi-cluster TLS/certificate expiry radar. Single Go binary, no CRD, no
 in-cluster install — point it at kubeconfigs and/or live endpoints and get
 a unified expiry report.
 
-## Why
-
-- cert-manager tracks its own `Certificate` objects, but says nothing about
-  raw TLS endpoints (load balancers, vendor APIs, legacy certs) it doesn't manage.
-- A `Certificate` can report `Ready` while the backing `Secret`'s actual leaf
-  cert is stale — renewal silently broke and nobody noticed.
-- Multi-cluster orgs have no single place to see "what expires next, everywhere."
-
-CertHealthz scans all three sources — cert-manager `Certificate` objects, raw
-`kubernetes.io/tls` Secrets, and live TLS endpoints — and reports them in one
-sorted-by-urgency table.
-
-## Comparison
+![CertHealthz dashboard](https://i.postimg.cc/RZCs0rM6/image.png)
 
 | Tool | Cert-manager CR aware | Raw Secret drift check | Live endpoint probe | Multi-cluster | History/trend diff | Dashboard UI | Single binary, no install | Alerting |
 |---|---|---|---|---|---|---|---|---|
@@ -39,6 +27,18 @@ against the backing Secret's actual leaf cert (catching silent renewal drift)
 while staying a zero-install single binary — the exporters need a
 Prometheus+Grafana stack, Uptime Kuma needs its own server, and
 testssl.sh/sslyze are one-shot scanners with no cluster or history awareness.
+
+## Why
+
+- cert-manager tracks its own `Certificate` objects, but says nothing about
+  raw TLS endpoints (load balancers, vendor APIs, legacy certs) it doesn't manage.
+- A `Certificate` can report `Ready` while the backing `Secret`'s actual leaf
+  cert is stale — renewal silently broke and nobody noticed.
+- Multi-cluster orgs have no single place to see "what expires next, everywhere."
+
+CertHealthz scans all three sources — cert-manager `Certificate` objects, raw
+`kubernetes.io/tls` Secrets, and live TLS endpoints — and reports them in one
+sorted-by-urgency table.
 
 ## Install
 
