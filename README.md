@@ -30,7 +30,18 @@ sorted-by-urgency table.
 go install github.com/thev1ndu/certhealthz@latest
 ```
 
-Or download a prebuilt binary from the [releases page](https://github.com/thev1ndu/certhealthz/releases) (linux/darwin/windows, amd64/arm64).
+Or download a prebuilt binary from the [releases page](https://github.com/thev1ndu/certhealthz/releases) (linux/darwin/windows, amd64/arm64):
+
+```sh
+tar -xzf certhealthz_darwin_arm64.tar.gz   # pick the asset for your OS/arch
+xattr -d com.apple.quarantine certhealthz  # macOS only — clears Gatekeeper quarantine
+chmod +x certhealthz
+sudo mv certhealthz /usr/local/bin/
+certhealthz --help
+```
+
+See [docs/RELEASES.md](docs/RELEASES.md) for checksum verification, Windows
+steps, and how to update to a newer release.
 
 Or build from source:
 
