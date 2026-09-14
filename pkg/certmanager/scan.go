@@ -23,6 +23,7 @@ type Certificate struct {
 	Namespace   string
 	Name        string
 	SecretName  string
+	DNSNames    []string
 	Ready       bool
 	NotAfter    time.Time
 	RenewalTime time.Time
@@ -54,6 +55,9 @@ func flatten(cluster string, u unstructured.Unstructured) Certificate {
 	secretName, _, _ := unstructured.NestedString(u.Object, "spec", "secretName")
 	c.SecretName = secretName
 
+	dnsNames, _, _ := unstructured.NestedStringSlice(u.Object, "spec", "dnsNames")
+	c.DNSNames = dnsNames
+
 	notAfterStr, _, _ := unstructured.NestedString(u.Object, "status", "notAfter")
 	if t, err := time.Parse(time.RFC3339, notAfterStr); err == nil {
 		c.NotAfter = t
@@ -64,6 +68,16 @@ func flatten(cluster string, u unstructured.Unstructured) Certificate {
 		c.RenewalTime = t
 	}
 
+	c.Ready, c.FailReason = readyCondition(u)
+
+	return c
+}
+
+// readyCondition walks status.conditions for a "Ready" entry, returning its
+// status and (when not ready) reason — the same condition shape cert-manager
+// writes on Certificate, Issuer, and ClusterIssuer alike, so this backs both
+// flatten() here and flattenIssuer() in issuers.go.
+func readyCondition(u unstructured.Unstructured) (ready bool, reason string) {
 	conditions, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
 	for _, raw := range conditions {
 		cond, ok := raw.(map[string]interface{})
@@ -71,14 +85,13 @@ func flatten(cluster string, u unstructured.Unstructured) Certificate {
 			continue
 		}
 		if cond["type"] == "Ready" {
-			c.Ready = cond["status"] == "True"
-			if !c.Ready {
-				if reason, ok := cond["reason"].(string); ok {
-					c.FailReason = reason
+			ready = cond["status"] == "True"
+			if !ready {
+				if r, ok := cond["reason"].(string); ok {
+					reason = r
 				}
 			}
 		}
 	}
-
-	return c
+	return ready, reason
 }

@@ -21,29 +21,27 @@ export default function HistoryPage({ isLive, active }) {
       {!isLive ? (
         <NotConnected />
       ) : (
-        <div className="max-w-2xl">
-          <Section title="Audit log">
-            {error && <p className="mb-3 text-sm text-destructive">{error}</p>}
+        <Section title="Audit log">
+          {error && <p className="mb-3 text-sm text-destructive">{error}</p>}
 
-            {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
+          {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
 
-            {!loading && events.length === 0 && !error && (
-              <p className="text-sm text-muted-foreground">
-                No changes recorded yet — the first automatic scan runs shortly after startup.
-              </p>
-            )}
+          {!loading && events.length === 0 && !error && (
+            <p className="text-sm text-muted-foreground">
+              No changes recorded yet — the first automatic scan runs shortly after startup.
+            </p>
+          )}
 
-            {!loading && events.length > 0 && <HistoryEventList events={events} />}
+          {!loading && events.length > 0 && <HistoryEventList events={events} />}
 
-            {hasMore && (
-              <div className="mt-4">
-                <Button variant="outline" onClick={loadMore} disabled={loadingMore}>
-                  {loadingMore ? "Loading…" : "Load more"}
-                </Button>
-              </div>
-            )}
-          </Section>
-        </div>
+          {hasMore && (
+            <div className="mt-4">
+              <Button variant="outline" onClick={loadMore} disabled={loadingMore}>
+                {loadingMore ? "Loading…" : "Load more"}
+              </Button>
+            </div>
+          )}
+        </Section>
       )}
     </div>
   );

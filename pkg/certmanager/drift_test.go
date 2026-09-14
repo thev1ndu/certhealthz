@@ -55,6 +55,43 @@ func TestCheckDrift(t *testing.T) {
 				"ns/s1": {Namespace: "ns", Name: "s1", NotAfter: notAfter},
 			},
 		},
+		{
+			name: "matching dnsNames in any order, no drift",
+			cert: Certificate{
+				Namespace: "ns", SecretName: "s1", NotAfter: notAfter,
+				DNSNames: []string{"b.example.com", "a.example.com"},
+			},
+			secrets: map[string]SecretCert{
+				"ns/s1": {
+					Namespace: "ns", Name: "s1", NotAfter: notAfter,
+					DNSNames: []string{"a.example.com", "b.example.com"},
+				},
+			},
+		},
+		{
+			name: "spec dnsNames no longer matches secret's actual SANs",
+			cert: Certificate{
+				Namespace: "ns", SecretName: "s1", NotAfter: notAfter,
+				DNSNames: []string{"a.example.com", "b.example.com"},
+			},
+			secrets: map[string]SecretCert{
+				"ns/s1": {
+					Namespace: "ns", Name: "s1", NotAfter: notAfter,
+					DNSNames: []string{"a.example.com"},
+				},
+			},
+			wantDrift: true,
+		},
+		{
+			name: "empty spec dnsNames is not itself drift",
+			cert: Certificate{Namespace: "ns", SecretName: "s1", NotAfter: notAfter},
+			secrets: map[string]SecretCert{
+				"ns/s1": {
+					Namespace: "ns", Name: "s1", NotAfter: notAfter,
+					DNSNames: []string{"a.example.com"},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {

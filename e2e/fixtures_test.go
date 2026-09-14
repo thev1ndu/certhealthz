@@ -36,6 +36,8 @@ import (
 )
 
 var certGVR = schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "certificates"}
+var issuerGVR = schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "issuers"}
+var clusterIssuerGVR = schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "clusterissuers"}
 
 // generatedCert is a self-signed leaf certificate produced for a test
 // fixture, in both x509 and tls.Certificate form.
@@ -166,19 +168,63 @@ func newCertificateCR(namespace, name, secretName string, notAfter time.Time, re
 	return obj
 }
 
+// newIssuerCR builds an unstructured cert-manager.io/v1 Issuer, matching
+// the fields readyCondition reads (status.conditions[].{type,status,reason}).
+func newIssuerCR(namespace, name string, ready bool, failReason string) *unstructured.Unstructured {
+	return newIssuerLikeCR("Issuer", namespace, name, ready, failReason)
+}
+
+// newClusterIssuerCR builds an unstructured cert-manager.io/v1
+// ClusterIssuer — same shape as newIssuerCR but cluster-scoped (no
+// namespace).
+func newClusterIssuerCR(name string, ready bool, failReason string) *unstructured.Unstructured {
+	return newIssuerLikeCR("ClusterIssuer", "", name, ready, failReason)
+}
+
+func newIssuerLikeCR(kind, namespace, name string, ready bool, failReason string) *unstructured.Unstructured {
+	condStatus := "False"
+	if ready {
+		condStatus = "True"
+	}
+	metadata := map[string]interface{}{"name": name}
+	if namespace != "" {
+		metadata["namespace"] = namespace
+	}
+	return &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "cert-manager.io/v1",
+			"kind":       kind,
+			"metadata":   metadata,
+			"status": map[string]interface{}{
+				"conditions": []interface{}{
+					map[string]interface{}{
+						"type":   "Ready",
+						"status": condStatus,
+						"reason": failReason,
+					},
+				},
+			},
+		},
+	}
+}
+
 // newFakeDynamicClient builds a dynamic.Interface seeded with the given
-// Certificate CRs, in place of certmanager.NewDynamicClient's real
-// kubeconfig-backed client.
-func newFakeDynamicClient(certs ...*unstructured.Unstructured) *dynamicfake.FakeDynamicClient {
-	objs := make([]runtime.Object, len(certs))
-	for i, c := range certs {
-		objs[i] = c
+// cert-manager objects (Certificates, Issuers, ClusterIssuers, ...), in
+// place of certmanager.NewDynamicClient's real kubeconfig-backed client.
+func newFakeDynamicClient(objects ...*unstructured.Unstructured) *dynamicfake.FakeDynamicClient {
+	objs := make([]runtime.Object, len(objects))
+	for i, o := range objects {
+		objs[i] = o
 	}
 	// WithCustomListKinds (rather than NewSimpleDynamicClient) is required
 	// even in the zero-object case: the plain constructor infers list kinds
-	// from the seeded objects, so it panics on a List call when no
-	// Certificate was seeded at all (see e.g. the empty-cluster history test).
-	listKinds := map[schema.GroupVersionResource]string{certGVR: "CertificateList"}
+	// from the seeded objects, so it panics on a List call when no object of
+	// that GVR was seeded at all (see e.g. the empty-cluster history test).
+	listKinds := map[schema.GroupVersionResource]string{
+		certGVR:          "CertificateList",
+		issuerGVR:        "IssuerList",
+		clusterIssuerGVR: "ClusterIssuerList",
+	}
 	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds, objs...)
 }
 

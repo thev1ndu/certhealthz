@@ -2,6 +2,7 @@ package certmanager
 
 import (
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -42,5 +43,25 @@ func CheckDrift(c Certificate, secretsByKey map[string]SecretCert) (drifted bool
 			c.NotAfter.Format(time.RFC3339), key, secret.NotAfter.Format(time.RFC3339),
 		)
 	}
+
+	// Only meaningful when the spec actually sets dnsNames — a Certificate
+	// can also get its SANs from spec.ipAddresses/uris/emailAddresses/
+	// otherNames, none of which this checks, so an empty spec.dnsNames
+	// isn't itself a sign of drift.
+	if len(c.DNSNames) > 0 && !sameDNSNames(c.DNSNames, secret.DNSNames) {
+		return true, fmt.Sprintf(
+			"Certificate spec.dnsNames %v no longer matches Secret %s's actual leaf cert SANs %v",
+			c.DNSNames, key, secret.DNSNames,
+		)
+	}
 	return false, ""
+}
+
+// sameDNSNames reports whether two DNS name lists contain the same names,
+// order-independent.
+func sameDNSNames(a, b []string) bool {
+	a, b = slices.Clone(a), slices.Clone(b)
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(a, b)
 }

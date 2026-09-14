@@ -37,6 +37,13 @@ const VISIBLE_COLUMNS_KEY = "certhealthz.visibleColumns";
 // "name" is the primary identifier and click target — always shown, no toggle.
 const ALWAYS_VISIBLE = "name";
 
+// /api/certs/detail parses an x509 leaf certificate — sources with no
+// certificate of their own (a cert-manager Issuer/ClusterIssuer is a
+// authority, not a cert) have nothing for that page to show, so their rows
+// aren't clickable. The info-icon tooltip already surfaces row.detail
+// (e.g. a Ready=False reason) without needing a detail page.
+const NON_DETAILABLE_SOURCES = new Set(["issuer", "clusterissuer"]);
+
 export const COLUMNS = [
   {
     id: "name",
@@ -308,11 +315,13 @@ export default function CertTable({ rows, onRowClick, visible }) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {sortedRows.map((row) => (
+            {sortedRows.map((row) => {
+              const detailable = !NON_DETAILABLE_SOURCES.has(row.source);
+              return (
               <TableRow
                 key={row.id}
-                className="cursor-pointer border-border/60"
-                onClick={() => onRowClick?.(row.id)}
+                className={cn("border-border/60", detailable && "cursor-pointer")}
+                onClick={detailable ? () => onRowClick?.(row.id) : undefined}
               >
                 <TableCell className="px-3">
                   <Tooltip>
@@ -340,7 +349,8 @@ export default function CertTable({ rows, onRowClick, visible }) {
                   </TableCell>
                 ))}
               </TableRow>
-            ))}
+              );
+            })}
             {sortedRows.length === 0 && (
               <TableRow className="hover:bg-transparent">
                 <TableCell colSpan={columns.length + 1} className="py-2">

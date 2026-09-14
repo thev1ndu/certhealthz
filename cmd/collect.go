@@ -193,6 +193,18 @@ func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnD
 			rows = append(rows, row)
 		}
 
+		issuers, err := certmanager.ScanIssuers(ctx, clusterLabel, target.Dyn)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		}
+		rows = append(rows, issuerRows(issuers)...)
+
+		clusterIssuers, err := certmanager.ScanClusterIssuers(ctx, clusterLabel, target.Dyn)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		}
+		rows = append(rows, issuerRows(clusterIssuers)...)
+
 		if includeSecrets {
 			for _, s := range secrets {
 				row := output.Row{
@@ -238,6 +250,36 @@ func probeRows(endpoints []string, timeout time.Duration, warnDays int) []output
 		}
 		row.NotAfter = r.NotAfter
 		row = output.Classify(row, warnDays)
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// issuerRows converts scanned Issuer/ClusterIssuer health into rows. These
+// have no expiry — NotAfter stays zero — which is already a fully tolerated
+// shape end-to-end: output.Sort already sinks zero-NotAfter rows last, and
+// the frontend already renders "—" for a null Days (the same shape a
+// not-Ready cert-manager Certificate already produces today).
+func issuerRows(issuers []certmanager.IssuerHealth) []output.Row {
+	rows := make([]output.Row, 0, len(issuers))
+	for _, h := range issuers {
+		source := "issuer"
+		namespace := h.Namespace
+		if h.Kind == "ClusterIssuer" {
+			source = "clusterissuer"
+			namespace = ""
+		}
+		row := output.Row{
+			Source:    source,
+			Cluster:   h.Cluster,
+			Namespace: namespace,
+			Name:      h.Name,
+			Status:    "ok",
+		}
+		if !h.Ready {
+			row.Status = "error"
+			row.Detail = "not ready: " + h.FailReason
+		}
 		rows = append(rows, row)
 	}
 	return rows
