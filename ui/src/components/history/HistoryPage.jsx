@@ -1,37 +1,45 @@
-import HistoryDiffTable from "@/components/history/HistoryDiffTable";
+import HistoryEventList from "@/components/history/HistoryEventList";
 import NotConnected from "@/components/layout/NotConnected";
 import PageHeading from "@/components/layout/PageHeading";
 import Section from "@/components/layout/Section";
 import { Button } from "@/components/ui/button";
-import { useHistory } from "@/hooks/useHistory";
+import { useHistoryEvents } from "@/hooks/useHistoryEvents";
 
 export default function HistoryPage({ isLive, active }) {
-  const { diff, error, busy, recordSnapshot } = useHistory(isLive, active);
+  const { events, hasMore, error, loading, loadingMore, loadMore } = useHistoryEvents(
+    isLive,
+    active,
+  );
 
   return (
     <div>
       <PageHeading
         title="History"
-        description="Record a snapshot of the current scan, and see what changed since the last one"
+        description="Audit log of every certificate change detected — recorded automatically, no manual snapshots"
       />
 
       {!isLive ? (
         <NotConnected />
       ) : (
         <div className="max-w-2xl">
-          <Section title="Snapshot">
-            <Button onClick={recordSnapshot} disabled={busy}>
-              {busy ? "Working…" : "Record snapshot"}
-            </Button>
+          <Section title="Audit log">
+            {error && <p className="mb-3 text-sm text-destructive">{error}</p>}
 
-            {error && <p className="mt-2 text-sm text-destructive">{error}</p>}
+            {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
 
-            {diff && (
+            {!loading && events.length === 0 && !error && (
+              <p className="text-sm text-muted-foreground">
+                No changes recorded yet — the first automatic scan runs shortly after startup.
+              </p>
+            )}
+
+            {!loading && events.length > 0 && <HistoryEventList events={events} />}
+
+            {hasMore && (
               <div className="mt-4">
-                {diff.message && (
-                  <p className="mb-2 text-sm text-muted-foreground">{diff.message}</p>
-                )}
-                {diff.changes?.length > 0 && <HistoryDiffTable changes={diff.changes} />}
+                <Button variant="outline" onClick={loadMore} disabled={loadingMore}>
+                  {loadingMore ? "Loading…" : "Load more"}
+                </Button>
               </div>
             )}
           </Section>

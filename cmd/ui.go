@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,13 +40,15 @@ const maxSettingsBodySize = 1 << 10 // 1 KiB
 const maxCTBodySize = 16 << 10 // 16 KiB
 
 var (
-	uiAddr         string
-	uiWarnDays     int
-	uiIncludeRaw   bool
-	uiWebhookURL   string
-	uiEndpoints    []string
-	uiProbeTimeout time.Duration
-	uiDBPath       string
+	uiAddr             string
+	uiWarnDays         int
+	uiIncludeRaw       bool
+	uiWebhookURL       string
+	uiEndpoints        []string
+	uiProbeTimeout     time.Duration
+	uiDBPath           string
+	uiRecordInterval   time.Duration
+	uiHistoryRetention time.Duration
 )
 
 // ClusterEntry identifies one cluster the dashboard scans. Kubeconfig is
@@ -376,7 +379,9 @@ func init() {
 	uiCmd.Flags().StringSliceVar(&uiEndpoints, "probe", nil, "live TLS endpoint (host or host:port) to probe on every scan; repeat flag for multiple")
 	uiCmd.Flags().DurationVar(&uiProbeTimeout, "probe-timeout", 5*time.Second, "per-endpoint dial timeout for --probe endpoints")
 	uiCmd.Flags().StringVar(&uiWebhookURL, "webhook", "", "webhook URL to POST flagged rows to; changeable at runtime from the UI")
-	uiCmd.Flags().StringVar(&uiDBPath, "db", defaultHistoryDBPath, "path to the SQLite history database used by the UI's Record/Diff panel")
+	uiCmd.Flags().StringVar(&uiDBPath, "db", defaultDBPath(), "path to the SQLite database used by the dashboard's audit log and persisted settings")
+	uiCmd.Flags().DurationVar(&uiRecordInterval, "record-interval", 15*time.Minute, "how often the dashboard automatically records a scan to the audit log")
+	uiCmd.Flags().DurationVar(&uiHistoryRetention, "history-retention", 720*time.Hour, "how long recorded runs are kept before being pruned; 0 disables pruning")
 	rootCmd.AddCommand(uiCmd)
 }
 
@@ -762,6 +767,86 @@ func handleHistoryDiff(store *history.Store, w http.ResponseWriter, _ *http.Requ
 	}
 }
 
+// apiEvent is the JSON shape of one entry in GET /api/history/events — an
+// apiChange plus the timestamp it was detected at, for the dashboard's
+// audit-trail view.
+type apiEvent struct {
+	At        string `json:"at"`
+	Kind      string `json:"kind"`
+	Source    string `json:"source"`
+	Cluster   string `json:"cluster"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	FromDays  *int   `json:"fromDays"`
+	ToDays    *int   `json:"toDays"`
+	FromState string `json:"fromState"`
+	ToState   string `json:"toState"`
+}
+
+// apiEventsResp is the JSON shape of GET /api/history/events. NextBefore is
+// the cursor to pass as ?before= to fetch the next page, omitted once
+// there's no more history to walk.
+type apiEventsResp struct {
+	Events     []apiEvent `json:"events"`
+	NextBefore int64      `json:"nextBefore,omitempty"`
+}
+
+const (
+	defaultEventsLimit = 50
+	maxEventsLimit     = 200
+)
+
+// handleHistoryEvents serves the dashboard's audit-trail feed: every change
+// ever detected between automatically recorded runs, newest first, paged
+// via ?limit= and ?before= (the previous response's nextBefore).
+func handleHistoryEvents(store *history.Store, w http.ResponseWriter, r *http.Request) {
+	limit := defaultEventsLimit
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		limit = min(n, maxEventsLimit)
+	}
+	var before int64
+	if v := r.URL.Query().Get("before"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			http.Error(w, "invalid before", http.StatusBadRequest)
+			return
+		}
+		before = n
+	}
+
+	events, nextBefore, err := store.Events(limit, before)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	resp := apiEventsResp{Events: make([]apiEvent, 0, len(events)), NextBefore: nextBefore}
+	for _, e := range events {
+		resp.Events = append(resp.Events, apiEvent{
+			At:        e.At.UTC().Format(time.RFC3339),
+			Kind:      e.Kind,
+			Source:    e.Identity.Source,
+			Cluster:   e.Identity.Cluster,
+			Namespace: e.Identity.Namespace,
+			Name:      e.Identity.Name,
+			FromDays:  e.FromDays,
+			ToDays:    e.ToDays,
+			FromState: e.FromState,
+			ToState:   e.ToState,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("encoding /api/history/events response: %v", err)
+	}
+}
+
 // uiKnownDNSNames flattens the DNS names on every kubernetes.io/tls
 // Secret across every configured dashboard cluster (startup --kubeconfig
 // and uploads alike), so a CT check can tell known from unknown against
@@ -847,7 +932,8 @@ type UIDeps struct {
 // NewUIMux builds the dashboard's HTTP routing: the embedded UI plus
 // the /api/certs, /api/certs/detail, /api/clusters (+ DELETE
 // /api/clusters/{label}), /api/endpoints (+ DELETE /api/endpoints/{endpoint}),
-// /api/settings, /api/alert, /api/history/record, /api/history/diff, and
+// /api/settings, /api/alert, /api/history/record, /api/history/diff,
+// /api/history/events, and
 // /api/ct endpoints.
 func NewUIMux(uiHandler http.Handler, deps UIDeps) *http.ServeMux {
 	mux := http.NewServeMux()
@@ -921,6 +1007,13 @@ func NewUIMux(uiHandler http.Handler, deps UIDeps) *http.ServeMux {
 		}
 		handleHistoryDiff(deps.History, w, r)
 	})
+	mux.HandleFunc("/api/history/events", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		handleHistoryEvents(deps.History, w, r)
+	})
 	mux.HandleFunc("/api/ct", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -990,6 +1083,9 @@ func runUI(_ *cobra.Command, _ []string) error {
 		},
 	})
 
+	store.SetRetention(uiHistoryRetention)
+	go autoRecordHistory(collect, store, uiRecordInterval)
+
 	fmt.Printf("certhealthz ui listening on %s\n", uiAddr)
 	server := &http.Server{
 		Addr:              uiAddr,
@@ -997,4 +1093,31 @@ func runUI(_ *cobra.Command, _ []string) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	return server.ListenAndServe()
+}
+
+// autoRecordHistory records a run immediately (so the audit log isn't empty
+// on first load) and again on every interval tick, for as long as the
+// process runs. This is the dashboard's only recording path — there is no
+// manual "record snapshot" trigger in the UI; a transient collect error is
+// logged and skipped rather than stopping the loop, since the next tick
+// will simply try again.
+func autoRecordHistory(collect func(context.Context) ([]output.Row, error), store *history.Store, interval time.Duration) {
+	record := func() {
+		rows, err := collect(context.Background())
+		if err != nil {
+			log.Printf("auto-recording scan: %v", err)
+			return
+		}
+		if _, err := store.RecordRun(rows); err != nil {
+			log.Printf("auto-recording scan: %v", err)
+		}
+	}
+
+	record()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		record()
+	}
 }

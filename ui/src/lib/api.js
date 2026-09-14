@@ -66,12 +66,12 @@ export function sendTestAlert() {
   return request("/api/alert", { method: "POST" });
 }
 
-export function getHistoryDiff() {
-  return request("/api/history/diff");
-}
-
-export function recordHistorySnapshot() {
-  return request("/api/history/record", { method: "POST" });
+export function getHistoryEvents({ limit, before } = {}) {
+  const params = new URLSearchParams();
+  if (limit) params.set("limit", limit);
+  if (before) params.set("before", before);
+  const qs = params.toString();
+  return request(`/api/history/events${qs ? `?${qs}` : ""}`);
 }
 
 export function checkCT(domains, since) {

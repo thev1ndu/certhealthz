@@ -32,7 +32,7 @@ func init() {
 	scanCmd.Flags().BoolVar(&scanPrometheus, "prometheus", false, "print Prometheus exposition format instead of a table")
 	scanCmd.Flags().BoolVar(&scanIncludeRaw, "include-secrets", true, "also scan raw kubernetes.io/tls Secrets, for Certificate drift detection and Ingress cross-referencing")
 	scanCmd.Flags().BoolVar(&scanRecord, "record", false, "persist this scan to the history database for trend diffing (see: certhealthz history diff)")
-	scanCmd.Flags().StringVar(&scanDBPath, "db", defaultHistoryDBPath, "path to the SQLite history database used by --record and history diff")
+	scanCmd.Flags().StringVar(&scanDBPath, "db", defaultDBPath(), "path to the SQLite database used by --record and history diff")
 	rootCmd.AddCommand(scanCmd)
 }
 

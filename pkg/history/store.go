@@ -5,6 +5,8 @@ package history
 import (
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -46,12 +48,22 @@ CREATE TABLE IF NOT EXISTS endpoints (
 
 // Store wraps a SQLite-backed history database.
 type Store struct {
-	db *sql.DB
+	db        *sql.DB
+	retention time.Duration // 0 = keep every run forever (the default)
 }
 
 // Open opens (creating if needed) the SQLite database at path and ensures
-// the schema exists.
+// the schema exists. path's parent directory is created if it doesn't
+// exist yet — the default path lives under the OS's per-user config
+// directory (see cmd's defaultDBPath), which is otherwise empty on
+// first run.
 func Open(path string) (*Store, error) {
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("creating history db directory: %w", err)
+		}
+	}
+
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("opening history db: %w", err)
@@ -67,7 +79,18 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// RecordRun stores rows as a new run, stamped with the current time.
+// SetRetention bounds how long recorded runs are kept: RecordRun prunes
+// anything older than d after each successful insert. Zero (the default)
+// disables pruning entirely — used by the `scan --record`/`history diff`
+// CLI path, which wants every run kept indefinitely; the dashboard's
+// automatic recorder sets this to bound the now-continuously-growing
+// table.
+func (s *Store) SetRetention(d time.Duration) {
+	s.retention = d
+}
+
+// RecordRun stores rows as a new run, stamped with the current time, then
+// (if a retention window is set) prunes runs older than that window.
 func (s *Store) RecordRun(rows []output.Row) (int64, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -110,7 +133,23 @@ func (s *Store) RecordRun(rows []output.Row) (int64, error) {
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
+
+	if s.retention > 0 {
+		if err := s.pruneOlderThan(time.Now().UTC().Add(-s.retention)); err != nil {
+			return runID, fmt.Errorf("pruning old runs: %w", err)
+		}
+	}
+
 	return runID, nil
+}
+
+// pruneOlderThan deletes every run (and its records) stamped before cutoff.
+func (s *Store) pruneOlderThan(cutoff time.Time) error {
+	if _, err := s.db.Exec(`DELETE FROM records WHERE run_id IN (SELECT id FROM runs WHERE ran_at < ?)`, cutoff); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`DELETE FROM runs WHERE ran_at < ?`, cutoff)
+	return err
 }
 
 // Record is one persisted row from a past run.
@@ -197,6 +236,102 @@ func (s *Store) recordsForRun(runID int64) ([]Record, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// runsBefore returns up to n runs at or before before (or the n most recent
+// runs if before is 0), newest first. before is inclusive — Events resumes
+// paging from a run that was already used as the older half of a diffed
+// pair, and must be able to pair it again as the newer half of the next
+// one, or that pair would be silently skipped at every page boundary.
+func (s *Store) runsBefore(before int64, n int) (ids []int64, ats []time.Time, err error) {
+	var rows *sql.Rows
+	if before == 0 {
+		rows, err = s.db.Query(`SELECT id, ran_at FROM runs ORDER BY id DESC LIMIT ?`, n)
+	} else {
+		rows, err = s.db.Query(`SELECT id, ran_at FROM runs WHERE id <= ? ORDER BY id DESC LIMIT ?`, before, n)
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("querying runs: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int64
+		var at time.Time
+		if err := rows.Scan(&id, &at); err != nil {
+			return nil, nil, err
+		}
+		ids = append(ids, id)
+		ats = append(ats, at)
+	}
+	return ids, ats, rows.Err()
+}
+
+// eventBatchSize is how many runs Events fetches per round trip while
+// walking backward for changes — most consecutive runs have no changes at
+// all (certs rarely move between scans), so a single batch, not one query
+// per run, keeps that common case cheap.
+const eventBatchSize = 50
+
+// maxRunsPerEventsCall bounds how many runs a single Events call will walk
+// looking for `limit` changes, so a long quiet stretch of history can't turn
+// one request into an unbounded table scan — callers page further back via
+// the returned nextBefore cursor instead.
+const maxRunsPerEventsCall = 500
+
+// Event is one detected change, in its recorded chronological context —
+// the atomic unit of the dashboard's audit-trail view.
+type Event struct {
+	Change
+	At    time.Time
+	RunID int64
+}
+
+// Events returns up to limit Changes across consecutive recorded runs,
+// walking backward from before (or the newest run, if before == 0), newest
+// first, for the dashboard's audit-trail view. nextBefore is the cursor to
+// pass back in to keep paging; it's 0 once there's no more history to walk.
+func (s *Store) Events(limit int, before int64) (events []Event, nextBefore int64, err error) {
+	cursor := before
+	scanned := 0
+
+	for len(events) < limit && scanned < maxRunsPerEventsCall {
+		ids, ats, err := s.runsBefore(cursor, eventBatchSize+1)
+		if err != nil {
+			return nil, 0, err
+		}
+		if len(ids) < 2 {
+			return events, 0, nil // fewer than one full pair left — history exhausted
+		}
+
+		for i := 0; i < len(ids)-1; i++ {
+			cur, err := s.recordsForRun(ids[i])
+			if err != nil {
+				return nil, 0, err
+			}
+			prev, err := s.recordsForRun(ids[i+1])
+			if err != nil {
+				return nil, 0, err
+			}
+			for _, c := range Diff(cur, prev) {
+				events = append(events, Event{Change: c, At: ats[i], RunID: ids[i]})
+			}
+			if len(events) >= limit {
+				// ids[i+1] anchors the next page: it's the older half of the
+				// pair we just diffed, so resuming from it neither skips nor
+				// re-emits anything already returned.
+				return events, ids[i+1], nil
+			}
+		}
+
+		scanned += len(ids) - 1
+		cursor = ids[len(ids)-1]
+		if len(ids) <= eventBatchSize {
+			return events, 0, nil // fetched fewer than requested — reached the end
+		}
+	}
+
+	return events, cursor, nil
 }
 
 // Change describes how one certificate's tracked state moved between runs.

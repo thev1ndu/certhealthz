@@ -152,7 +152,7 @@ export default function OverviewPage({ certs, isLive, onNavigate }) {
             <NavCard
               icon={ClockCounterClockwiseIcon}
               title="History"
-              description="Record a snapshot, see what changed"
+              description="Browse the automatically recorded audit log"
               onClick={() => onNavigate("history")}
             />
             <NavCard

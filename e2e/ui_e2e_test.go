@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -500,6 +501,107 @@ func TestUIHistoryEndToEnd(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected a status-change entry for tracked-tls -> expired, got %+v", diff.Changes)
+	}
+}
+
+// TestUIHistoryEventsEndToEnd records three snapshots with changing fixture
+// state and asserts GET /api/history/events returns every detected change
+// across all of them (not just the latest pair), newest first, and that
+// ?limit=/?before= paging walks the same events without gaps or repeats.
+func TestUIHistoryEventsEndToEnd(t *testing.T) {
+	dyn := newFakeDynamicClient()
+
+	certA := generateCert(t, "a.example.com", time.Now().Add(60*24*time.Hour))
+	typed := newFakeTypedClient(newTLSSecret("a-tls", certA))
+	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
+	collect := func(ctx context.Context) ([]output.Row, error) {
+		return cmd.CollectRowsFromClients(ctx, targets, warnDays, true)
+	}
+
+	uiHandler, err := ui.Handler()
+	if err != nil {
+		t.Fatalf("ui.Handler: %v", err)
+	}
+	mux := cmd.NewUIMux(uiHandler, cmd.UIDeps{
+		Collect:   collect,
+		Clusters:  cmd.NewClusterRegistry(),
+		Endpoints: cmd.NewEndpointRegistry(),
+		History:   newTestHistoryStore(t),
+		Settings:  cmd.NewSettings(warnDays, true, ""),
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	record := func() {
+		resp, err := http.Post(server.URL+"/api/history/record", "application/json", nil)
+		if err != nil {
+			t.Fatalf("POST /api/history/record: %v", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+		resp.Body.Close()
+	}
+
+	// Run 1: just "a".
+	record()
+
+	// Run 2: "a" starts expiring, "b" appears — 2 changes.
+	certAExpiring := generateCert(t, "a.example.com", time.Now().Add(3*24*time.Hour))
+	certB := generateCert(t, "b.example.com", time.Now().Add(30*24*time.Hour))
+	targets[0].Typed = newFakeTypedClient(
+		newTLSSecret("a-tls", certAExpiring),
+		newTLSSecret("b-tls", certB),
+	)
+	record()
+
+	// Run 3: "b" removed — 1 change.
+	targets[0].Typed = newFakeTypedClient(newTLSSecret("a-tls", certAExpiring))
+	record()
+
+	fetchEvents := func(before int64) (events []map[string]any, nextBefore float64) {
+		t.Helper()
+		url := server.URL + "/api/history/events?limit=1"
+		if before != 0 {
+			url += "&before=" + strconv.FormatInt(before, 10)
+		}
+		resp, err := http.Get(url)
+		if err != nil {
+			t.Fatalf("GET /api/history/events: %v", err)
+		}
+		defer resp.Body.Close()
+		var body struct {
+			Events     []map[string]any `json:"events"`
+			NextBefore float64          `json:"nextBefore"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decoding /api/history/events response: %v", err)
+		}
+		return body.Events, body.NextBefore
+	}
+
+	// limit=1 forces one page per call; the pair (run3,run2) has exactly one
+	// change ("removed" b), so it must land alone on the first page.
+	page1, cursor1 := fetchEvents(0)
+	if len(page1) != 1 || page1[0]["kind"] != "removed" || page1[0]["name"] != "b-tls" {
+		t.Fatalf("expected first page to be b-tls removed, got %+v", page1)
+	}
+	if cursor1 == 0 {
+		t.Fatalf("expected a non-zero nextBefore cursor, got 0")
+	}
+
+	page2, cursor2 := fetchEvents(int64(cursor1))
+	kinds := make(map[string]string, len(page2))
+	for _, e := range page2 {
+		kinds[e["name"].(string)] = e["kind"].(string)
+	}
+	if kinds["a-tls"] != "status-change" || kinds["b-tls"] != "new" {
+		t.Fatalf("expected a-tls status-change and b-tls new on page 2, got %+v", page2)
+	}
+
+	page3, cursor3 := fetchEvents(int64(cursor2))
+	if len(page3) != 0 || cursor3 != 0 {
+		t.Fatalf("expected an empty final page with no cursor, got events=%+v cursor=%v", page3, cursor3)
 	}
 }
 

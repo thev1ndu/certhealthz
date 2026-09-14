@@ -3,13 +3,31 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 	"github.com/thev1ndu/certhealthz/pkg/history"
 )
 
-const defaultHistoryDBPath = "certhealthz-history.db"
+// defaultDBPath returns the SQLite database's default location: a fixed
+// path under the OS's per-user config directory (~/.config, ~/Library/
+// Application Support, %AppData%), so `scan --record`, `history diff`, and
+// `ui` all agree on where it lives regardless of the current working
+// directory each is run from — rather than each dropping (or expecting) a
+// loose *.db file wherever it happens to be invoked. Named generically
+// (not defaultHistoryDBPath) because the same file holds more than history:
+// recorded runs, and the dashboard's persisted settings/clusters/endpoints
+// (see pkg/history.Store's Save*/List* methods) — "history" is one tenant
+// of it, not the whole schema. Falls back to a cwd-relative filename if the
+// OS config directory can't be determined (e.g. no HOME set).
+func defaultDBPath() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "certhealthz-state.db"
+	}
+	return filepath.Join(dir, "certhealthz", "state.db")
+}
 
 var historyDBPath string
 
@@ -25,7 +43,7 @@ var historyDiffCmd = &cobra.Command{
 }
 
 func init() {
-	historyCmd.PersistentFlags().StringVar(&historyDBPath, "db", defaultHistoryDBPath, "path to the SQLite history database")
+	historyCmd.PersistentFlags().StringVar(&historyDBPath, "db", defaultDBPath(), "path to the SQLite database")
 	historyCmd.AddCommand(historyDiffCmd)
 	rootCmd.AddCommand(historyCmd)
 }
