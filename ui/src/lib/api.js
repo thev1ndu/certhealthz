@@ -28,6 +28,10 @@ export function getCertDetail(id) {
   return request(`/api/certs/detail?id=${encodeURIComponent(id)}`);
 }
 
+export function reissueCert(id) {
+  return request(`/api/certs/reissue?id=${encodeURIComponent(id)}`, { method: "POST" });
+}
+
 export function getClusters() {
   return request("/api/clusters");
 }

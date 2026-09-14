@@ -130,6 +130,11 @@ func newTLSSecret(name string, cert generatedCert) *corev1.Secret {
 // newCertificateCR builds an unstructured cert-manager.io/v1 Certificate,
 // matching the fields certmanager.Scan reads (spec.secretName,
 // status.notAfter, status.renewalTime, status.conditions[].{type,status,reason}).
+// namespace is a real, independent parameter; every current caller just
+// happens to pass "ns1" because newTLSSecret's fixture secrets are
+// hardcoded to that namespace too (see its doc comment).
+//
+//nolint:unparam
 func newCertificateCR(namespace, name, secretName string, notAfter time.Time, ready bool, failReason string) *unstructured.Unstructured {
 	condStatus := "False"
 	if ready {

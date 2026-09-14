@@ -1,9 +1,18 @@
 import { useEffect, useState } from "react";
-import { ArrowLeftIcon, WarningIcon } from "@phosphor-icons/react";
+import { ArrowLeftIcon, ArrowsClockwiseIcon, WarningIcon } from "@phosphor-icons/react";
 import StatusBadge from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import Section from "@/components/layout/Section";
-import { getCertDetail } from "@/lib/api";
+import { getCertDetail, reissueCert } from "@/lib/api";
 
 function Field({ label, mono, full, children }) {
   return (
@@ -32,6 +41,10 @@ function TagList({ items }) {
   );
 }
 
+function Warning({ children }) {
+  return <span className="text-destructive">{children}</span>;
+}
+
 function formatDate(iso) {
   if (!iso) return null;
   const d = new Date(iso);
@@ -46,6 +59,23 @@ export default function CertDetailPage({ id, row, onBack }) {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  const [reissueOpen, setReissueOpen] = useState(false);
+  const [reissuing, setReissuing] = useState(false);
+  const [reissueError, setReissueError] = useState(null);
+  const [reissued, setReissued] = useState(false);
+
+  function handleReissue() {
+    setReissuing(true);
+    setReissueError(null);
+    reissueCert(id)
+      .then(() => {
+        setReissued(true);
+        setReissueOpen(false);
+      })
+      .catch((err) => setReissueError(err.message || "Failed to trigger reissue"))
+      .finally(() => setReissuing(false));
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -90,7 +120,47 @@ export default function CertDetailPage({ id, row, onBack }) {
             </p>
           )}
         </div>
+
+        {row?.source === "cert-manager" && row.status !== "ok" && (
+          <Dialog open={reissueOpen} onOpenChange={setReissueOpen}>
+            <DialogTrigger
+              render={
+                <Button variant="secondary">
+                  <ArrowsClockwiseIcon data-icon="inline-start" />
+                  Force reissue
+                </Button>
+              }
+            />
+            <DialogContent className="corner-ticks rounded-none sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Force reissue this certificate?</DialogTitle>
+                <DialogDescription>
+                  This triggers a real reissuance against the live cluster — cert-manager will
+                  request a new certificate from its issuer right away, rather than waiting for
+                  the normal renewal window. If the issuer is ACME-based (e.g. Let's Encrypt),
+                  this counts against its rate limits. The new certificate will appear here on
+                  the next automatic scan.
+                </DialogDescription>
+              </DialogHeader>
+              {reissueError && <p className="text-sm text-destructive">{reissueError}</p>}
+              <DialogFooter>
+                <Button variant="secondary" onClick={() => setReissueOpen(false)} disabled={reissuing}>
+                  Cancel
+                </Button>
+                <Button onClick={handleReissue} disabled={reissuing}>
+                  {reissuing ? "Triggering…" : "Force reissue"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
       </div>
+
+      {reissued && (
+        <div className="corner-ticks relative mb-4 flex items-center gap-2 border border-status-ok/40 bg-status-ok/10 p-4 text-sm text-status-ok">
+          Reissue triggered — the new certificate will appear on the next automatic scan.
+        </div>
+      )}
 
       {!loading && error && (
         <div className="corner-ticks relative flex items-center gap-2 border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
@@ -157,6 +227,9 @@ export default function CertDetailPage({ id, row, onBack }) {
               <Field label="SHA-1 fingerprint" full mono>
                 {detail.fingerprintSha1}
               </Field>
+              <Field label="Weak crypto" full>
+                {detail.isWeakCrypto ? <Warning>Yes — {detail.cryptoIssue}</Warning> : "No"}
+              </Field>
             </div>
           </Section>
 
@@ -182,11 +255,16 @@ export default function CertDetailPage({ id, row, onBack }) {
             </div>
           </Section>
 
-          {detail.chain?.length > 0 && (
-            <div className="md:col-span-2">
-              <Section title="Certificate chain">
-                {detail.chain.map((c, i) => (
-                  <div key={i} className="border-t border-border/60 pt-3 first:border-0 first:pt-0">
+          <div className="md:col-span-2">
+            <Section title="Certificate chain">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Field label="Chain valid" full>
+                  {detail.chainValid ? "Yes" : <Warning>No — {detail.chainIssue}</Warning>}
+                </Field>
+              </div>
+              {detail.chain?.length > 0 &&
+                detail.chain.map((c, i) => (
+                  <div key={i} className="mt-3 border-t border-border/60 pt-3">
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <Field label={`#${i + 1} subject`} mono>
                         {c.subject}
@@ -199,9 +277,8 @@ export default function CertDetailPage({ id, row, onBack }) {
                     </div>
                   </div>
                 ))}
-              </Section>
-            </div>
-          )}
+            </Section>
+          </div>
         </div>
       )}
     </div>

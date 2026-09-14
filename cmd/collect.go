@@ -178,7 +178,16 @@ func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnD
 				Status:    status,
 				Detail:    detail,
 			}
-			if status != "error" && status != "drift" {
+			switch {
+			case status == "error" || status == "drift":
+				// keep the reason already set above
+			case includeSecrets:
+				if sc, ok := secretsByKey[c.Namespace+"/"+c.SecretName]; ok {
+					row = classifySecret(row, sc, warnDays)
+				} else {
+					row = output.Classify(row, warnDays)
+				}
+			default:
 				row = output.Classify(row, warnDays)
 			}
 			rows = append(rows, row)
@@ -193,7 +202,7 @@ func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnD
 					Name:      s.Name,
 					NotAfter:  s.NotAfter,
 				}
-				row = output.Classify(row, warnDays)
+				row = classifySecret(row, s, warnDays)
 				rows = append(rows, row)
 			}
 
@@ -234,6 +243,27 @@ func probeRows(endpoints []string, timeout time.Duration, warnDays int) []output
 	return rows
 }
 
+// classifySecret runs the normal expiry-based Classify, then — only if the
+// cert isn't already expired or erroring — folds in the crypto/chain
+// findings a Secret's parsed cert already carries. Expiry always wins over
+// crypto findings: an expired cert is failing handshakes right now, which
+// is more urgent than a lower-priority latent risk like a weak key.
+func classifySecret(row output.Row, sc certmanager.SecretCert, warnDays int) output.Row {
+	row = output.Classify(row, warnDays)
+	if row.Status == "expired" || row.Status == "error" {
+		return row
+	}
+	switch {
+	case !sc.ChainOK:
+		row.Status = "broken-chain"
+		row.Detail = sc.ChainIssue
+	case sc.WeakCrypto:
+		row.Status = "weak-crypto"
+		row.Detail = sc.CryptoIssue
+	}
+	return row
+}
+
 // ingressRoutesRows cross-checks each Ingress TLS route against its backing
 // Secret: missing entirely, or present but not actually covering the
 // route's host (wrong/no matching SAN). One row per route×host, or one row
@@ -272,7 +302,7 @@ func ingressRoutesRows(routes []ingress.Route, secretsByKey map[string]certmanag
 				row.Detail = fmt.Sprintf("host %s not covered by Secret %s's certificate SANs %v", host, key, secret.DNSNames)
 			default:
 				row.NotAfter = secret.NotAfter
-				row = output.Classify(row, warnDays)
+				row = classifySecret(row, secret, warnDays)
 			}
 			rows = append(rows, row)
 		}

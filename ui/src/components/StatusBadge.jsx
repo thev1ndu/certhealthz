@@ -9,6 +9,8 @@ const STATUS_COLOR = {
   expired: "var(--status-error)",
   error: "var(--status-neutral)",
   drift: "var(--status-error)",
+  "broken-chain": "var(--status-error)",
+  "weak-crypto": "var(--status-warning)",
 };
 
 export const STATUS_LABEL = {
@@ -17,6 +19,8 @@ export const STATUS_LABEL = {
   expired: "Expired",
   error: "Error",
   drift: "Drift",
+  "broken-chain": "Broken chain",
+  "weak-crypto": "Weak crypto",
 };
 
 export default function StatusBadge({ status, className, children }) {

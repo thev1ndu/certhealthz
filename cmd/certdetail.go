@@ -1,9 +1,6 @@
 package cmd
 
 import (
-	"crypto/ecdsa"
-	"crypto/ed25519"
-	"crypto/rsa"
 	"crypto/sha1" //nolint:gosec // SHA1 fingerprint is a standard x509 display field, not used for security
 	"crypto/sha256"
 	"crypto/x509"
@@ -69,6 +66,11 @@ type apiCertDetail struct {
 	OCSPServers           []string `json:"ocspServers"`
 	CRLDistributionPoints []string `json:"crlDistributionPoints"`
 
+	IsWeakCrypto bool   `json:"isWeakCrypto"`
+	CryptoIssue  string `json:"cryptoIssue,omitempty"`
+	ChainValid   bool   `json:"chainValid"`
+	ChainIssue   string `json:"chainIssue,omitempty"`
+
 	Chain []apiChainCert `json:"chain"`
 }
 
@@ -116,19 +118,6 @@ func extKeyUsageStrings(usages []x509.ExtKeyUsage) []string {
 	return out
 }
 
-func publicKeyDetail(pub any) (algorithm string, bits int) {
-	switch k := pub.(type) {
-	case *rsa.PublicKey:
-		return "RSA", k.N.BitLen()
-	case *ecdsa.PublicKey:
-		return "ECDSA", k.Curve.Params().BitSize
-	case ed25519.PublicKey:
-		return "Ed25519", 256
-	default:
-		return "Unknown", 0
-	}
-}
-
 // certToDetail extracts every field the dashboard's detail view can show
 // from a parsed leaf certificate and its chain (intermediates/root, leaf
 // excluded), the shared core of handleCertDetail regardless of which source
@@ -136,7 +125,9 @@ func publicKeyDetail(pub any) (algorithm string, bits int) {
 func certToDetail(id rowIdentity, leaf *x509.Certificate, chain []*x509.Certificate) apiCertDetail {
 	sha1Sum := sha1.Sum(leaf.Raw) //nolint:gosec // SHA1 fingerprint is a standard x509 display field, not used for security
 	sha256Sum := sha256.Sum256(leaf.Raw)
-	pubAlg, pubBits := publicKeyDetail(leaf.PublicKey)
+	pubAlg, pubBits := certmanager.PublicKeyDetail(leaf.PublicKey)
+	weak, cryptoIssue := certmanager.WeakCryptoIssue(pubAlg, pubBits, leaf.SignatureAlgorithm.String())
+	chainOK, chainIssue := certmanager.VerifyChain(leaf, chain)
 
 	apiChain := make([]apiChainCert, 0, len(chain))
 	for _, c := range chain {
@@ -182,6 +173,11 @@ func certToDetail(id rowIdentity, leaf *x509.Certificate, chain []*x509.Certific
 
 		OCSPServers:           leaf.OCSPServer,
 		CRLDistributionPoints: leaf.CRLDistributionPoints,
+
+		IsWeakCrypto: weak,
+		CryptoIssue:  cryptoIssue,
+		ChainValid:   chainOK,
+		ChainIssue:   chainIssue,
 
 		Chain: apiChain,
 	}
@@ -354,6 +350,45 @@ func handleCertDetail(deps UIDeps, w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(detail); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// handleReissueCert manually triggers a cert-manager reissuance for a
+// single cert-manager-sourced certificate (see certmanager.TriggerReissue
+// for exactly what this does and doesn't touch). This is the app's first
+// write operation against a user's cluster — restricted to
+// id.Source == "cert-manager" since raw Secrets and probed endpoints have
+// no Certificate object to trigger a reissue on.
+func handleReissueCert(deps UIDeps, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id, err := decodeRowID(r.URL.Query().Get("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if id.Source != "cert-manager" {
+		http.Error(w, "reissue is only available for cert-manager certificates", http.StatusBadRequest)
+		return
+	}
+
+	cc, err := deps.ClusterClientsFor(id.Cluster)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	if err := certmanager.TriggerReissue(r.Context(), cc.Dyn, id.Namespace, id.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]bool{"triggered": true}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

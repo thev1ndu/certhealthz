@@ -930,7 +930,7 @@ type UIDeps struct {
 }
 
 // NewUIMux builds the dashboard's HTTP routing: the embedded UI plus
-// the /api/certs, /api/certs/detail, /api/clusters (+ DELETE
+// the /api/certs, /api/certs/detail, /api/certs/reissue, /api/clusters (+ DELETE
 // /api/clusters/{label}), /api/endpoints (+ DELETE /api/endpoints/{endpoint}),
 // /api/settings, /api/alert, /api/history/record, /api/history/diff,
 // /api/history/events, and
@@ -950,6 +950,9 @@ func NewUIMux(uiHandler http.Handler, deps UIDeps) *http.ServeMux {
 	})
 	mux.HandleFunc("/api/certs/detail", func(w http.ResponseWriter, r *http.Request) {
 		handleCertDetail(deps, w, r)
+	})
+	mux.HandleFunc("/api/certs/reissue", func(w http.ResponseWriter, r *http.Request) {
+		handleReissueCert(deps, w, r)
 	})
 	mux.HandleFunc("/api/clusters", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
