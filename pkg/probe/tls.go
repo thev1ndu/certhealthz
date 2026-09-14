@@ -29,9 +29,11 @@ type EndpointCert struct {
 	Err      error
 }
 
-// Probe dials host:port with TLS and reads the leaf certificate's expiry.
-// Endpoint may be "host" (defaults to :443) or "host:port".
-func Probe(endpoint string, timeout time.Duration, opts ...Option) EndpointCert {
+// dialPeerCertificates dials endpoint with TLS and returns the full peer
+// certificate chain as presented by the server (leaf first). Shared by Probe
+// (which only needs the leaf's expiry/issuer) and ProbeChain (which needs
+// the whole chain for the dashboard's certificate detail view).
+func dialPeerCertificates(endpoint string, timeout time.Duration, opts ...Option) ([]*x509.Certificate, error) {
 	host, port, err := net.SplitHostPort(endpoint)
 	if err != nil {
 		host, port = endpoint, "443"
@@ -49,13 +51,23 @@ func Probe(endpoint string, timeout time.Duration, opts ...Option) EndpointCert 
 	dialer := &net.Dialer{Timeout: timeout}
 	conn, err := tls.DialWithDialer(dialer, "tcp", addr, cfg)
 	if err != nil {
-		return EndpointCert{Endpoint: endpoint, Err: fmt.Errorf("dial %s: %w", addr, err)}
+		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
 	defer conn.Close()
 
 	certs := conn.ConnectionState().PeerCertificates
 	if len(certs) == 0 {
-		return EndpointCert{Endpoint: endpoint, Err: fmt.Errorf("no peer certificates from %s", addr)}
+		return nil, fmt.Errorf("no peer certificates from %s", addr)
+	}
+	return certs, nil
+}
+
+// Probe dials host:port with TLS and reads the leaf certificate's expiry.
+// Endpoint may be "host" (defaults to :443) or "host:port".
+func Probe(endpoint string, timeout time.Duration, opts ...Option) EndpointCert {
+	certs, err := dialPeerCertificates(endpoint, timeout, opts...)
+	if err != nil {
+		return EndpointCert{Endpoint: endpoint, Err: err}
 	}
 
 	leaf := certs[0]
@@ -64,6 +76,17 @@ func Probe(endpoint string, timeout time.Duration, opts ...Option) EndpointCert 
 		NotAfter: leaf.NotAfter,
 		Issuer:   leaf.Issuer.CommonName,
 	}
+}
+
+// ProbeChain dials endpoint with TLS and returns the full peer certificate
+// chain (leaf first, then any intermediates/root the server presented),
+// backing the dashboard's certificate detail view.
+func ProbeChain(endpoint string, timeout time.Duration, opts ...Option) (leaf *x509.Certificate, chain []*x509.Certificate, err error) {
+	certs, err := dialPeerCertificates(endpoint, timeout, opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+	return certs[0], certs[1:], nil
 }
 
 // ProbeAll probes every endpoint concurrently and returns results in

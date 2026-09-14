@@ -1,4 +1,5 @@
 import { DownloadSimpleIcon, FunnelIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
+import { ColumnVisibilityMenu } from "@/components/CertTable";
 import AddClusterPopover from "@/components/certificates/AddClusterPopover";
 import AddEndpointPopover from "@/components/certificates/AddEndpointPopover";
 import SourcesDialog from "@/components/certificates/SourcesDialog";
@@ -31,6 +32,8 @@ export default function CertificatesToolbar({
   addCluster,
   addEndpoint,
   onSourcesChanged,
+  visibleColumns,
+  onToggleColumn,
 }) {
   const activeFilterCount = statusFilter.size + clusterFilter.size;
 
@@ -56,14 +59,14 @@ export default function CertificatesToolbar({
               <FunnelIcon data-icon="inline-start" />
               Filters
               {activeFilterCount > 0 && (
-                <span className="ml-1 flex size-4 items-center justify-center rounded-full bg-primary font-mono text-[10px] text-primary-foreground">
+                <span className="ml-1 flex size-4 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground">
                   {activeFilterCount}
                 </span>
               )}
             </Button>
           }
         />
-        <DropdownMenuContent>
+        <DropdownMenuContent className="corner-ticks relative rounded-none">
           <DropdownMenuGroup>
             <DropdownMenuLabel>Status</DropdownMenuLabel>
             {STATUS_ORDER.map((status) => (
@@ -109,6 +112,7 @@ export default function CertificatesToolbar({
         <SourcesDialog isLive={isLive} onChanged={onSourcesChanged} />
         <AddClusterPopover isLive={isLive} addCluster={addCluster} />
         <AddEndpointPopover isLive={isLive} addEndpoint={addEndpoint} />
+        <ColumnVisibilityMenu visible={visibleColumns} onToggle={onToggleColumn} />
       </div>
     </div>
   );

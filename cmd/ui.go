@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -395,7 +396,7 @@ type apiRow struct {
 
 func toAPIRows(rows []output.Row) []apiRow {
 	out := make([]apiRow, 0, len(rows))
-	for i, r := range rows {
+	for _, r := range rows {
 		cluster := r.Cluster
 		if cluster == "" {
 			cluster = "-"
@@ -410,7 +411,7 @@ func toAPIRows(rows []output.Row) []apiRow {
 			days = &d
 		}
 		out = append(out, apiRow{
-			ID:        fmt.Sprintf("%s-%s-%d", r.Source, r.Name, i),
+			ID:        encodeRowID(r),
 			Source:    r.Source,
 			Cluster:   cluster,
 			Namespace: namespace,
@@ -421,6 +422,47 @@ func toAPIRows(rows []output.Row) []apiRow {
 		})
 	}
 	return out
+}
+
+// rowIdentity is the subset of output.Row that uniquely identifies a cert
+// across scans, used to build a stable apiRow.ID and to resolve that ID back
+// to a specific cert for the detail endpoint (handleCertDetail).
+type rowIdentity struct {
+	Source    string `json:"s"`
+	Cluster   string `json:"c"`
+	Namespace string `json:"n"`
+	Name      string `json:"m"`
+}
+
+// encodeRowID builds a stable, opaque, URL-safe ID from a row's identity
+// fields (source/cluster/namespace/name), replacing the old index-based ID
+// which changed whenever the row set changed shape.
+func encodeRowID(r output.Row) string {
+	return rowIdentity{Source: r.Source, Cluster: r.Cluster, Namespace: r.Namespace, Name: r.Name}.encode()
+}
+
+// encode is the inverse of decodeRowID, also used directly by
+// handleCertDetail (cmd/certdetail.go) to echo an id back in its response.
+func (id rowIdentity) encode() string {
+	b, err := json.Marshal(id)
+	if err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// decodeRowID reverses encodeRowID, e.g. for handleCertDetail to resolve an
+// incoming ?id= back to the cert it names.
+func decodeRowID(id string) (rowIdentity, error) {
+	b, err := base64.RawURLEncoding.DecodeString(id)
+	if err != nil {
+		return rowIdentity{}, fmt.Errorf("invalid id: %w", err)
+	}
+	var ri rowIdentity
+	if err := json.Unmarshal(b, &ri); err != nil {
+		return rowIdentity{}, fmt.Errorf("invalid id: %w", err)
+	}
+	return ri, nil
 }
 
 // apiCluster is the JSON shape of one entry in GET /api/clusters.
@@ -792,13 +834,21 @@ type UIDeps struct {
 	Endpoints *EndpointRegistry
 	History   *history.Store
 	Settings  *Settings
+
+	// ClusterClientsFor resolves a cluster's real (possibly
+	// kubeconfig-renamed) label to the clients needed to fetch one
+	// certificate on demand, for handleCertDetail (cmd/certdetail.go). Like
+	// Collect, this is a seam: production wires it to
+	// findClusterClients(uiClusters.All(), ...) but e2e tests can point it at
+	// fake clientsets directly, the same way they override Collect.
+	ClusterClientsFor func(cluster string) (ClusterClients, error)
 }
 
 // NewUIMux builds the dashboard's HTTP routing: the embedded UI plus
-// the /api/certs, /api/clusters (+ DELETE /api/clusters/{label}),
-// /api/endpoints (+ DELETE /api/endpoints/{endpoint}), /api/settings,
-// /api/alert, /api/history/record, /api/history/diff, and /api/ct
-// endpoints.
+// the /api/certs, /api/certs/detail, /api/clusters (+ DELETE
+// /api/clusters/{label}), /api/endpoints (+ DELETE /api/endpoints/{endpoint}),
+// /api/settings, /api/alert, /api/history/record, /api/history/diff, and
+// /api/ct endpoints.
 func NewUIMux(uiHandler http.Handler, deps UIDeps) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/certs", func(w http.ResponseWriter, r *http.Request) {
@@ -811,6 +861,9 @@ func NewUIMux(uiHandler http.Handler, deps UIDeps) *http.ServeMux {
 		if err := json.NewEncoder(w).Encode(toAPIRows(rows)); err != nil {
 			log.Printf("encoding /api/certs response: %v", err)
 		}
+	})
+	mux.HandleFunc("/api/certs/detail", func(w http.ResponseWriter, r *http.Request) {
+		handleCertDetail(deps, w, r)
 	})
 	mux.HandleFunc("/api/clusters", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -910,22 +963,9 @@ func runUI(_ *cobra.Command, _ []string) error {
 	collect := func(ctx context.Context) ([]output.Row, error) {
 		warnDays, includeSecrets, _ := uiSettings.Get()
 
-		entries := uiClusters.All()
-		if len(entries) == 0 {
-			entries = []ClusterEntry{{}} // empty label => default loading rules
-		}
-
-		clients := make([]ClusterClients, 0, len(entries))
-		for _, e := range entries {
-			label := e.Label
-			if label == "" {
-				label = "default"
-			}
-			cc, err := buildClusterClients(label, e.Kubeconfig, e.Label, includeSecrets)
-			if err != nil {
-				return nil, err
-			}
-			clients = append(clients, cc)
+		clients, err := buildAllClusterClients(uiClusters.All(), includeSecrets)
+		if err != nil {
+			return nil, err
 		}
 
 		rows, err := CollectRowsFromClients(ctx, clients, warnDays, includeSecrets)
@@ -945,6 +985,9 @@ func runUI(_ *cobra.Command, _ []string) error {
 		Endpoints: uiEndpointsRegistry,
 		History:   store,
 		Settings:  uiSettings,
+		ClusterClientsFor: func(cluster string) (ClusterClients, error) {
+			return findClusterClients(uiClusters.All(), cluster, true)
+		},
 	})
 
 	fmt.Printf("certhealthz ui listening on %s\n", uiAddr)

@@ -39,10 +39,16 @@ export default function AddEndpointPopover({ isLive, addEndpoint }) {
           </Button>
         }
       />
-      <PopoverContent className="w-96">
+      <PopoverContent className="corner-ticks relative w-96 rounded-none">
         <div className="mb-1 flex items-start justify-between gap-4">
           <PopoverTitle>Add endpoint</PopoverTitle>
-          <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={() => openChange(false)}>
+          <Button
+            variant="outline"
+            size="icon-sm"
+            className="rounded-none"
+            aria-label="Close"
+            onClick={() => openChange(false)}
+          >
             <XIcon />
           </Button>
         </div>

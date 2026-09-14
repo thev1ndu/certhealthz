@@ -1,8 +1,8 @@
 import CTResultsTable from "@/components/ct/CTResultsTable";
 import NotConnected from "@/components/layout/NotConnected";
 import PageHeading from "@/components/layout/PageHeading";
+import Section from "@/components/layout/Section";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import {
   Select,
@@ -26,17 +26,17 @@ export default function CTCheckPage({ isLive }) {
   const { domains, setDomains, since, setSince, results, error, busy, submit } = useCTCheck();
 
   return (
-    <div className="max-w-2xl">
+    <div>
       <PageHeading
-        title="Check Certificate Transparency logs"
+        title="CT Check"
         description="Find recently logged certs for your domains not covered by any known Secret"
       />
 
       {!isLive ? (
         <NotConnected />
       ) : (
-        <Card size="sm">
-          <CardContent>
+        <div className="flex max-w-2xl flex-col gap-4">
+          <Section title="Check">
             <FieldGroup>
               <Field>
                 <FieldLabel htmlFor="ct-domains">
@@ -75,14 +75,14 @@ export default function CTCheckPage({ isLive }) {
                 {busy ? "Checking…" : "Check"}
               </Button>
             </div>
+          </Section>
 
-            {results && (
-              <div className="mt-4">
-                <CTResultsTable results={results} />
-              </div>
-            )}
-          </CardContent>
-        </Card>
+          {results && (
+            <Section title="Results">
+              <CTResultsTable results={results} />
+            </Section>
+          )}
+        </div>
       )}
     </div>
   );

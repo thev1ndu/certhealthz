@@ -68,3 +68,35 @@ func parseSecret(cluster string, s corev1.Secret) (SecretCert, bool) {
 		DNSNames:  cert.DNSNames,
 	}, true
 }
+
+// ParseSecretChain decodes every PEM block in a kubernetes.io/tls Secret's
+// tls.crt, returning the leaf certificate and any intermediates/roots that
+// followed it in the same file. Unlike parseSecret (which only needs the
+// leaf's expiry), this backs the dashboard's full certificate detail view.
+func ParseSecretChain(s corev1.Secret) (leaf *x509.Certificate, chain []*x509.Certificate, err error) {
+	raw := s.Data[corev1.TLSCertKey]
+	if len(raw) == 0 {
+		return nil, nil, fmt.Errorf("secret %s/%s has no %s data", s.Namespace, s.Name, corev1.TLSCertKey)
+	}
+
+	var certs []*x509.Certificate
+	for len(raw) > 0 {
+		var block *pem.Block
+		block, raw = pem.Decode(raw)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parsing certificate in %s/%s: %w", s.Namespace, s.Name, err)
+		}
+		certs = append(certs, cert)
+	}
+	if len(certs) == 0 {
+		return nil, nil, fmt.Errorf("no certificates found in %s/%s", s.Namespace, s.Name)
+	}
+	return certs[0], certs[1:], nil
+}

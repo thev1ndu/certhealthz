@@ -2,8 +2,6 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
-@import "@fontsource/ibm-plex-mono/400.css";
-@import "@fontsource/ibm-plex-mono/500.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -29,10 +27,10 @@ body {
   border-inline: 1px solid var(--color-border);
 }
 
-/* Corner tick marks, like a drawing's crop marks — used on panel corners. */
-.corner-ticks {
-  position: relative;
-}
+/* Corner tick marks, like a drawing's crop marks — used on panel corners.
+   Doesn't set position itself — callers must already be positioned
+   (relative, absolute, fixed, ...) since some, like Dialog content, need a
+   specific position value the ticks shouldn't override. */
 .corner-ticks::before,
 .corner-ticks::after {
   content: "";
@@ -57,7 +55,6 @@ body {
 @theme inline {
   --font-heading: var(--font-sans);
   --font-sans: "Geist Variable", sans-serif;
-  --font-mono: "IBM Plex Mono", monospace;
   --color-status-ok: var(--status-ok);
   --color-status-warning: var(--status-warning);
   --color-status-error: var(--status-error);

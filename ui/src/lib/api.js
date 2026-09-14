@@ -24,6 +24,10 @@ export function getCerts() {
   return request("/api/certs");
 }
 
+export function getCertDetail(id) {
+  return request(`/api/certs/detail?id=${encodeURIComponent(id)}`);
+}
+
 export function getClusters() {
   return request("/api/clusters");
 }

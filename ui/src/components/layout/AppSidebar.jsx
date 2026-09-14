@@ -2,6 +2,7 @@ import {
   CertificateIcon,
   ClockCounterClockwiseIcon,
   GearSixIcon,
+  HouseIcon,
   ShieldCheckIcon,
 } from "@phosphor-icons/react";
 import {
@@ -16,6 +17,7 @@ import {
 } from "@/components/ui/sidebar";
 
 export const TABS = [
+  { id: "overview", label: "Overview", icon: HouseIcon, index: "00" },
   { id: "certificates", label: "Certificates", icon: CertificateIcon, index: "01" },
   { id: "history", label: "History", icon: ClockCounterClockwiseIcon, index: "02" },
   { id: "ct", label: "CT Check", icon: ShieldCheckIcon, index: "03" },
@@ -26,9 +28,12 @@ export default function AppSidebar({ activeTab, onTabChange, isLive }) {
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border">
       <SidebarHeader className="px-3 py-4">
-        <span className="font-heading text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
-          CertHealthz
-        </span>
+        <div className="flex items-center gap-2 group-data-[collapsible=icon]:justify-center">
+          <img src="/C.webp" alt="" className="size-6 shrink-0 object-contain" />
+          <span className="font-heading text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
+            CertHealthz
+          </span>
+        </div>
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
@@ -42,7 +47,7 @@ export default function AppSidebar({ activeTab, onTabChange, isLive }) {
                 >
                   <tab.icon size={16} />
                   <span>{tab.label}</span>
-                  <span className="ml-auto font-mono text-[10px] text-muted-foreground group-data-[collapsible=icon]:hidden">
+                  <span className="ml-auto text-[10px] text-muted-foreground group-data-[collapsible=icon]:hidden">
                     {tab.index}
                   </span>
                 </SidebarMenuButton>
@@ -58,7 +63,7 @@ export default function AppSidebar({ activeTab, onTabChange, isLive }) {
               "size-1.5 shrink-0 rounded-full " + (isLive ? "bg-status-ok" : "bg-status-neutral")
             }
           />
-          <span className="font-mono text-[11px] text-muted-foreground group-data-[collapsible=icon]:hidden">
+          <span className="text-[11px] text-muted-foreground group-data-[collapsible=icon]:hidden">
             {isLive ? "Connected to live scan" : "Not connected"}
           </span>
         </div>

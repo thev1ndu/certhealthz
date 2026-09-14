@@ -22,11 +22,11 @@ export default function HistoryDiffTable({ changes }) {
       <TableBody>
         {changes.map((c, i) => (
           <TableRow key={i}>
-            <TableCell className="font-mono text-xs uppercase">{c.kind}</TableCell>
-            <TableCell className="font-mono text-xs text-muted-foreground">{c.source}</TableCell>
+            <TableCell className="text-xs uppercase">{c.kind}</TableCell>
+            <TableCell className="text-xs text-muted-foreground">{c.source}</TableCell>
             <TableCell>{c.name}</TableCell>
-            <TableCell className="font-mono text-xs">{c.fromState || "—"}</TableCell>
-            <TableCell className="font-mono text-xs">{c.toState || "—"}</TableCell>
+            <TableCell className="text-xs">{c.fromState || "—"}</TableCell>
+            <TableCell className="text-xs">{c.toState || "—"}</TableCell>
           </TableRow>
         ))}
       </TableBody>

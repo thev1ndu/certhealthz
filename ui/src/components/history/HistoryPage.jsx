@@ -1,15 +1,15 @@
 import HistoryDiffTable from "@/components/history/HistoryDiffTable";
 import NotConnected from "@/components/layout/NotConnected";
 import PageHeading from "@/components/layout/PageHeading";
+import Section from "@/components/layout/Section";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { useHistory } from "@/hooks/useHistory";
 
 export default function HistoryPage({ isLive, active }) {
   const { diff, error, busy, recordSnapshot } = useHistory(isLive, active);
 
   return (
-    <div className="max-w-2xl">
+    <div>
       <PageHeading
         title="History"
         description="Record a snapshot of the current scan, and see what changed since the last one"
@@ -18,8 +18,8 @@ export default function HistoryPage({ isLive, active }) {
       {!isLive ? (
         <NotConnected />
       ) : (
-        <Card size="sm">
-          <CardContent>
+        <div className="max-w-2xl">
+          <Section title="Snapshot">
             <Button onClick={recordSnapshot} disabled={busy}>
               {busy ? "Working…" : "Record snapshot"}
             </Button>
@@ -34,8 +34,8 @@ export default function HistoryPage({ isLive, active }) {
                 {diff.changes?.length > 0 && <HistoryDiffTable changes={diff.changes} />}
               </div>
             )}
-          </CardContent>
-        </Card>
+          </Section>
+        </div>
       )}
     </div>
   );

@@ -1,12 +1,23 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CaretDownIcon,
   CaretUpDownIcon,
   CaretUpIcon,
+  GearIcon,
   InfoIcon,
   MagnifyingGlassIcon,
 } from "@phosphor-icons/react";
 import StatusBadge, { STATUS_LABEL } from "@/components/StatusBadge";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Table,
   TableBody,
@@ -19,7 +30,14 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { cn } from "@/lib/utils";
 
-const COLUMNS = [
+// Column visibility is a pure display preference, so it's persisted client-side
+// rather than through the server-backed /api/settings (which covers scan
+// behavior, not UI layout).
+const VISIBLE_COLUMNS_KEY = "certhealthz.visibleColumns";
+// "name" is the primary identifier and click target — always shown, no toggle.
+const ALWAYS_VISIBLE = "name";
+
+export const COLUMNS = [
   {
     id: "name",
     label: "Name",
@@ -111,6 +129,64 @@ function useColumnWidths() {
   return { widths, onResizeStart };
 }
 
+export function useVisibleColumns() {
+  const [visible, setVisible] = useState(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(VISIBLE_COLUMNS_KEY));
+      if (Array.isArray(stored)) return new Set(stored);
+    } catch {
+      // fall through to default
+    }
+    return new Set(COLUMNS.map((c) => c.id));
+  });
+
+  useEffect(() => {
+    localStorage.setItem(VISIBLE_COLUMNS_KEY, JSON.stringify([...visible]));
+  }, [visible]);
+
+  const toggle = useCallback((id) => {
+    if (id === ALWAYS_VISIBLE) return;
+    setVisible((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  return { visible, toggle };
+}
+
+export function ColumnVisibilityMenu({ visible, onToggle }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button variant="outline" size="icon-sm" aria-label="Customize visible columns" />
+        }
+      >
+        <GearIcon size={14} />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Visible columns</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          {COLUMNS.map((c) => (
+            <DropdownMenuCheckboxItem
+              key={c.id}
+              checked={visible.has(c.id)}
+              disabled={c.id === ALWAYS_VISIBLE}
+              onCheckedChange={() => onToggle(c.id)}
+            >
+              {c.label}
+            </DropdownMenuCheckboxItem>
+          ))}
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function ResizeHandle({ onMouseDown, onTouchStart }) {
   return (
     <span
@@ -137,7 +213,7 @@ function SortHead({ column, sort, onSort }) {
             type="button"
             onClick={() => onSort(column.id)}
             aria-label={`Sort by ${column.label}`}
-            className="inline-flex items-center gap-1 font-mono text-[11px] font-medium tracking-wider text-muted-foreground uppercase hover:text-foreground"
+            className="inline-flex items-center gap-1 text-[11px] font-medium tracking-wider text-muted-foreground uppercase hover:text-foreground"
           />
         }
       >
@@ -153,9 +229,10 @@ function SortHead({ column, sort, onSort }) {
   );
 }
 
-export default function CertTable({ rows }) {
+export default function CertTable({ rows, onRowClick, visible }) {
   const { widths, onResizeStart } = useColumnWidths();
   const [sort, setSort] = useState({ id: null, dir: "asc" });
+  const columns = useMemo(() => COLUMNS.filter((c) => visible.has(c.id)), [visible]);
 
   function handleSort(id) {
     setSort((prev) => {
@@ -177,94 +254,111 @@ export default function CertTable({ rows }) {
     });
   }, [rows, sort]);
 
+  const cellContent = {
+    name: (row) => (
+      <div className="flex flex-col gap-0.5">
+        <span className="truncate text-sm font-medium">{row.name}</span>
+        {row.namespace !== "-" && (
+          <span className="truncate text-xs text-muted-foreground">
+            /{row.namespace}
+          </span>
+        )}
+      </div>
+    ),
+    source: (row) => (
+      <span className="text-xs text-muted-foreground">{row.source}</span>
+    ),
+    cluster: (row) => (
+      <span
+        className={cn("text-sm", row.cluster === "-" ? "text-muted-foreground" : "text-foreground")}
+      >
+        {row.cluster}
+      </span>
+    ),
+    status: (row) => <StatusBadge status={row.status} />,
+    expiry: (row) => (
+      <span className="text-sm tabular-nums">
+        {row.days === null ? "—" : `${row.days}d`}
+      </span>
+    ),
+  };
+
   return (
-    <div className="overflow-x-auto">
-      <Table className="table-fixed">
-        <colgroup>
-          <col style={{ width: 36 }} />
-          {COLUMNS.map((c) => (
-            <col key={c.id} style={{ width: widths[c.id] }} />
-          ))}
-        </colgroup>
-        <TableHeader>
-          <TableRow className="border-border hover:bg-transparent">
-            <TableHead />
-            {COLUMNS.map((c) => (
-              <TableHead key={c.id} className="relative h-9 px-3">
-                <SortHead column={c} sort={sort} onSort={handleSort} />
-                <ResizeHandle
-                  onMouseDown={onResizeStart(c.id, c.min)}
-                  onTouchStart={onResizeStart(c.id, c.min)}
-                />
-              </TableHead>
+    <div>
+      <div className="overflow-x-auto">
+        <Table className="table-fixed">
+          <colgroup>
+            <col style={{ width: 36 }} />
+            {columns.map((c) => (
+              <col key={c.id} style={{ width: widths[c.id] }} />
             ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {sortedRows.map((row) => (
-            <TableRow key={row.id} className="border-border/60">
-              <TableCell className="px-3">
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <span className="inline-flex text-primary/70 hover:text-primary" />
-                    }
-                  >
-                    <InfoIcon size={14} weight="fill" />
-                  </TooltipTrigger>
-                  <TooltipContent>{row.detail || "No additional detail"}</TooltipContent>
-                </Tooltip>
-              </TableCell>
-              <TableCell className="px-3">
-                <div className="flex flex-col gap-0.5">
-                  <span className="truncate text-sm font-medium">{row.name}</span>
-                  {row.namespace !== "-" && (
-                    <span className="truncate font-mono text-xs text-muted-foreground">
-                      /{row.namespace}
-                    </span>
-                  )}
-                </div>
-              </TableCell>
-              <TableCell className="px-3">
-                <span className="font-mono text-xs text-muted-foreground">{row.source}</span>
-              </TableCell>
-              <TableCell className="px-3">
-                <span
-                  className={cn(
-                    "text-sm",
-                    row.cluster === "-" ? "text-muted-foreground" : "text-foreground",
-                  )}
-                >
-                  {row.cluster}
-                </span>
-              </TableCell>
-              <TableCell className="px-3">
-                <StatusBadge status={row.status} />
-              </TableCell>
-              <TableCell className="px-3">
-                <span className="font-mono text-sm tabular-nums">
-                  {row.days === null ? "—" : `${row.days}d`}
-                </span>
-              </TableCell>
+          </colgroup>
+          <TableHeader>
+            <TableRow className="border-border hover:bg-transparent">
+              <TableHead />
+              {columns.map((c) => (
+                <TableHead key={c.id} className="relative h-9 px-3">
+                  <SortHead column={c} sort={sort} onSort={handleSort} />
+                  <ResizeHandle
+                    onMouseDown={onResizeStart(c.id, c.min)}
+                    onTouchStart={onResizeStart(c.id, c.min)}
+                  />
+                </TableHead>
+              ))}
             </TableRow>
-          ))}
-          {sortedRows.length === 0 && (
-            <TableRow className="hover:bg-transparent">
-              <TableCell colSpan={COLUMNS.length + 1} className="py-2">
-                <Empty className="border-0 p-10">
-                  <EmptyMedia variant="icon">
-                    <MagnifyingGlassIcon size={20} />
-                  </EmptyMedia>
-                  <EmptyTitle>No certificates match this filter</EmptyTitle>
-                  <EmptyDescription>
-                    Try a different cluster, namespace, or certificate name.
-                  </EmptyDescription>
-                </Empty>
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
+          </TableHeader>
+          <TableBody>
+            {sortedRows.map((row) => (
+              <TableRow
+                key={row.id}
+                className="cursor-pointer border-border/60"
+                onClick={() => onRowClick?.(row.id)}
+              >
+                <TableCell className="px-3">
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <span
+                          className={cn(
+                            "inline-flex",
+                            row.detail
+                              ? "text-blue-400 hover:text-blue-300"
+                              : "text-muted-foreground/40 hover:text-muted-foreground",
+                          )}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      }
+                    >
+                      <InfoIcon size={14} weight="fill" />
+                    </TooltipTrigger>
+                    <TooltipContent>{row.detail || "No additional detail"}</TooltipContent>
+                  </Tooltip>
+                </TableCell>
+                {columns.map((c) => (
+                  <TableCell key={c.id} className="px-3">
+                    {cellContent[c.id](row)}
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))}
+            {sortedRows.length === 0 && (
+              <TableRow className="hover:bg-transparent">
+                <TableCell colSpan={columns.length + 1} className="py-2">
+                  <Empty className="border-0 p-10">
+                    <EmptyMedia variant="icon">
+                      <MagnifyingGlassIcon size={20} />
+                    </EmptyMedia>
+                    <EmptyTitle>No certificates match this filter</EmptyTitle>
+                    <EmptyDescription>
+                      Try a different cluster, namespace, or certificate name.
+                    </EmptyDescription>
+                  </Empty>
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
     </div>
   );
 }

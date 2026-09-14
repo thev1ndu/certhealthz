@@ -42,10 +42,16 @@ export default function AddClusterPopover({ isLive, addCluster }) {
           </Button>
         }
       />
-      <PopoverContent className="w-96">
+      <PopoverContent className="corner-ticks relative w-96 rounded-none">
         <div className="mb-1 flex items-start justify-between gap-4">
           <PopoverTitle>Add cluster</PopoverTitle>
-          <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={() => openChange(false)}>
+          <Button
+            variant="outline"
+            size="icon-sm"
+            className="rounded-none"
+            aria-label="Close"
+            onClick={() => openChange(false)}
+          >
             <XIcon />
           </Button>
         </div>
@@ -55,16 +61,17 @@ export default function AddClusterPopover({ isLive, addCluster }) {
         </PopoverDescription>
 
         {file ? (
-          <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2">
+          <div className="flex items-center justify-between gap-3 rounded-none border border-border bg-muted/40 px-3 py-2">
             <div className="flex min-w-0 items-center gap-2">
               <span className="truncate text-sm">{file.name}</span>
-              <span className="font-mono text-xs text-muted-foreground">
+              <span className="text-xs text-muted-foreground">
                 {formatFileSize(file.size)}
               </span>
             </div>
             <Button
-              variant="ghost"
+              variant="outline"
               size="icon-sm"
+              className="rounded-none"
               aria-label="Remove file"
               onClick={() => pickFile(null)}
             >
@@ -74,7 +81,7 @@ export default function AddClusterPopover({ isLive, addCluster }) {
         ) : (
           <label
             className={
-              "flex cursor-pointer flex-col items-center gap-2 rounded-md border border-dashed px-4 py-8 text-center transition-colors " +
+              "flex cursor-pointer flex-col items-center gap-2 rounded-none border border-dashed px-4 py-8 text-center transition-colors " +
               (dragOver ? "border-primary bg-primary/5" : "border-border")
             }
             onDragOver={(e) => {
@@ -92,7 +99,7 @@ export default function AddClusterPopover({ isLive, addCluster }) {
             <CloudArrowUpIcon size={26} className="text-muted-foreground" />
             <span className="text-sm">
               Drag and drop your kubeconfig file here, or{" "}
-              <span className="font-mono text-xs">click to browse</span>
+              <span className="text-xs">click to browse</span>
             </span>
             <input
               type="file"

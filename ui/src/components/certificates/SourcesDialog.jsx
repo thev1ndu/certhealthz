@@ -16,11 +16,12 @@ import { useSources } from "@/hooks/useSources";
 function SourceRow({ name, removable, removeLabel, busy, onRemove }) {
   return (
     <div className="flex items-center justify-between gap-3 border-b border-border px-1 py-2.5 last:border-0">
-      <span className="truncate font-mono text-sm">{name}</span>
+      <span className="truncate text-sm">{name}</span>
       {removable ? (
         <Button
-          variant="ghost"
+          variant="outline"
           size="icon-sm"
+          className="rounded-none"
           aria-label={`Remove ${name}`}
           disabled={busy}
           onClick={onRemove}
@@ -30,7 +31,7 @@ function SourceRow({ name, removable, removeLabel, busy, onRemove }) {
       ) : (
         <Tooltip>
           <TooltipTrigger render={<span />}>
-            <span className="rounded-md bg-muted px-2 py-0.5 font-mono text-[10px] text-muted-foreground uppercase">
+            <span className="rounded-none bg-muted px-2 py-0.5 text-[10px] text-muted-foreground uppercase">
               {removeLabel}
             </span>
           </TooltipTrigger>
@@ -62,7 +63,7 @@ export default function SourcesDialog({ isLive, onChanged }) {
           </Button>
         }
       />
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="corner-ticks rounded-none sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Manage sources</DialogTitle>
           <DialogDescription>

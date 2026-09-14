@@ -11,7 +11,7 @@ export default function NotConnected() {
       <EmptyDescription>
         Run this and open this page from there:
         <br />
-        <span className="mt-1 inline-block rounded-md bg-muted px-2 py-1 font-mono text-xs text-foreground">
+        <span className="mt-1 inline-block rounded-md bg-muted px-2 py-1 text-xs text-foreground">
           certhealthz ui
         </span>
       </EmptyDescription>

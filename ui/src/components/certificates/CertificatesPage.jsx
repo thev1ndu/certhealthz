@@ -1,14 +1,15 @@
 import { useMemo, useState } from "react";
-import CertTable from "@/components/CertTable";
+import CertTable, { useVisibleColumns } from "@/components/CertTable";
+import CertDetailPage from "@/components/certificates/CertDetailPage";
 import CertificatesToolbar from "@/components/certificates/CertificatesToolbar";
 import StatusBadge from "@/components/StatusBadge";
 import NotConnected from "@/components/layout/NotConnected";
 import PageHeading from "@/components/layout/PageHeading";
-import { Card, CardFooter, CardHeader } from "@/components/ui/card";
+import Section from "@/components/layout/Section";
 import { useAddCluster } from "@/hooks/useAddCluster";
 import { useAddEndpoint } from "@/hooks/useAddEndpoint";
-import { useClusterList } from "@/hooks/useClusterList";
-import { STATUS_ORDER } from "@/lib/statuses";
+import { useKnownClusters } from "@/hooks/useKnownClusters";
+import { summarizeStatuses } from "@/lib/statuses";
 
 function matchesSearch(row, query) {
   if (!query) return true;
@@ -45,12 +46,14 @@ function exportJson(rows) {
   URL.revokeObjectURL(url);
 }
 
-export default function CertificatesPage({ certs, isLive, reloadCerts }) {
+export default function CertificatesPage({ certs, isLive, reloadCerts, initialCertId = null }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState(() => new Set());
   const [clusterFilter, setClusterFilter] = useState(() => new Set());
+  const [selectedCertId, setSelectedCertId] = useState(initialCertId);
+  const { visible: visibleColumns, toggle: toggleColumn } = useVisibleColumns();
 
-  const { serverClusters, reload: reloadClusters } = useClusterList(isLive);
+  const { clusters, reload: reloadClusters } = useKnownClusters(certs, isLive);
 
   function refreshAfterAdd() {
     return Promise.all([reloadCerts(), reloadClusters()]);
@@ -64,19 +67,18 @@ export default function CertificatesPage({ certs, isLive, reloadCerts }) {
     [certs, query, statusFilter, clusterFilter],
   );
 
-  const summary = useMemo(() => {
-    const counts = {};
-    for (const row of certs) counts[row.status] = (counts[row.status] ?? 0) + 1;
-    return STATUS_ORDER.filter((s) => counts[s]).map((s) => [s, counts[s]]);
-  }, [certs]);
+  const summary = useMemo(() => summarizeStatuses(certs), [certs]);
 
-  const clusters = useMemo(() => {
-    // Union, not override: /api/clusters only knows explicit --kubeconfig
-    // entries and uploads, not the implicit "default" cluster a bare scan
-    // falls back to — that one only shows up in the cert rows themselves.
-    const fromRows = certs.map((r) => r.cluster).filter((c) => c !== "-");
-    return [...new Set([...(serverClusters ?? []), ...fromRows])].sort();
-  }, [certs, serverClusters]);
+  if (selectedCertId) {
+    const selectedRow = certs.find((r) => r.id === selectedCertId);
+    return (
+      <CertDetailPage
+        id={selectedCertId}
+        row={selectedRow}
+        onBack={() => setSelectedCertId(null)}
+      />
+    );
+  }
 
   return (
     <div>
@@ -108,31 +110,35 @@ export default function CertificatesPage({ certs, isLive, reloadCerts }) {
         addCluster={addCluster}
         addEndpoint={addEndpoint}
         onSourcesChanged={refreshAfterAdd}
+        visibleColumns={visibleColumns}
+        onToggleColumn={toggleColumn}
       />
 
-      <Card size="sm" className="gap-0 p-0">
-        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
-          <span className="font-mono text-xs text-muted-foreground">
-            {certs.length} certificates tracked across {clusters.length} clusters and live
-            endpoints
-          </span>
-          <div className="flex flex-wrap items-center gap-1.5">
-            {summary.map(([status, count]) => (
-              <StatusBadge key={status} status={status} className="gap-1">
-                {count}
-              </StatusBadge>
-            ))}
+      <Section title="Certificates">
+        <div className="-mx-4 -mt-1">
+          <div className="flex flex-row flex-wrap items-center justify-between gap-2 border-y border-border px-4 py-3">
+            <span className="text-xs text-muted-foreground">
+              {certs.length} certificates tracked across {clusters.length} clusters and live
+              endpoints
+            </span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {summary.map(([status, count]) => (
+                <StatusBadge key={status} status={status} className="gap-1">
+                  {count}
+                </StatusBadge>
+              ))}
+            </div>
           </div>
-        </CardHeader>
 
-        <CertTable rows={rows} />
+          <CertTable rows={rows} onRowClick={setSelectedCertId} visible={visibleColumns} />
 
-        <CardFooter className="border-t border-border px-4 py-3">
-          <span className="font-mono text-xs text-muted-foreground">
-            Showing {rows.length === 0 ? 0 : 1}–{rows.length} of {certs.length}
-          </span>
-        </CardFooter>
-      </Card>
+          <div className="-mb-4 border-t border-border px-4 py-3">
+            <span className="text-xs text-muted-foreground">
+              Showing {rows.length === 0 ? 0 : 1}–{rows.length} of {certs.length}
+            </span>
+          </div>
+        </div>
+      </Section>
     </div>
   );
 }

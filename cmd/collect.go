@@ -70,6 +70,32 @@ func buildClusterClients(label string, kubeconfig []byte, path string, includeSe
 	return cc, nil
 }
 
+// buildAllClusterClients builds ClusterClients for every configured cluster
+// entry (falling back to a single default-loading-rules entry if none are
+// configured). Shared by the dashboard's collect closure and the certificate
+// detail endpoint, which both need to re-derive each cluster's real label
+// (buildClusterClients may rename it from the kubeconfig's own context) to
+// find the right one.
+func buildAllClusterClients(entries []ClusterEntry, includeSecrets bool) ([]ClusterClients, error) {
+	if len(entries) == 0 {
+		entries = []ClusterEntry{{}} // empty label => default loading rules
+	}
+
+	clients := make([]ClusterClients, 0, len(entries))
+	for _, e := range entries {
+		label := e.Label
+		if label == "" {
+			label = "default"
+		}
+		cc, err := buildClusterClients(label, e.Kubeconfig, e.Label, includeSecrets)
+		if err != nil {
+			return nil, err
+		}
+		clients = append(clients, cc)
+	}
+	return clients, nil
+}
+
 // collectRows scans every configured kubeconfig target (or the default
 // context if none were given) for cert-manager Certificates and, if
 // requested, raw kubernetes.io/tls Secrets, returning a unified, sorted
