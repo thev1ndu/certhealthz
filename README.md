@@ -117,7 +117,9 @@ certhealthz ct example.com --kubeconfig ~/.kube/prod --since 24h
 | `--probe-timeout`   | `ui`                 | per-endpoint dial timeout for `--probe` endpoints (default `5s`)                                               |
 | `--since`           | `ct`                 | only report CT log entries logged within this window (default `24h`; the UI's CT panel offers the same choices) |
 | `--record`          | `scan`               | persist this scan to the history database                                                                      |
-| `--db`              | `scan`, `history`, `ui` | path to the SQLite history database (default `certhealthz-history.db`; `ui` uses it for the History panel's Record/Diff) |
+| `--db`              | `scan`, `history`, `ui` | path to the SQLite database (default: OS per-user config dir, e.g. `~/Library/Application Support/certhealthz/state.db`; `ui` uses it for the audit log and persisted settings) |
+| `--record-interval` | `ui`                  | how often the dashboard automatically records a scan to the audit log (default `15m`)                          |
+| `--history-retention` | `ui`                | how long recorded runs are kept before pruning; `0` disables pruning (default `720h`)                          |
 | `--addr`            | `ui`                 | address to serve the dashboard on (default `:8090`)                                                            |
 
 ## Status
@@ -131,11 +133,28 @@ MVP.
 - [x] live TLS endpoint probe (`probe` command, concurrent; also probeable from the dashboard
       via `--probe`/`--probe-timeout` at startup or the "Add endpoint" UI, merged into the same
       `/api/certs` report as the cluster scan)
-- [x] threshold-tiered status classification (`ok` / `expiring` / `expired` / `error` / `drift`)
+- [x] threshold-tiered status classification (`ok` / `expiring` / `expired` / `error` / `drift` /
+      `weak-crypto` / `broken-chain`)
 - [x] drift detection: a Ready cert-manager Certificate is cross-checked against its backing
-      Secret's actual leaf cert; a missing Secret or a mismatched expiry flags the row `drift`
-      instead of trusting the Certificate's own status (surfaced in `scan`, `--webhook`, and the
-      dashboard)
+      Secret's actual leaf cert; a missing Secret, a mismatched expiry, or a `spec.dnsNames` that
+      no longer matches the Secret's actual SANs flags the row `drift` instead of trusting the
+      Certificate's own status (surfaced in `scan`, `--webhook`, and the dashboard)
+- [x] weak-crypto and broken/incomplete-chain detection: every scanned cert's key size,
+      signature algorithm, and bundled certificate chain are checked — an RSA key under 2048
+      bits or a SHA-1/MD5 signature flags `weak-crypto`; a chain missing its intermediate or
+      bundled with a mismatched one flags `broken-chain`. Deliberately checks the bundle's own
+      internal consistency rather than public CA trust, so certs from a private/internal CA
+      (common for cert-manager's own self-signed/CA issuers) aren't false-flagged.
+- [x] Issuer/ClusterIssuer health monitoring: cert-manager `Issuer`/`ClusterIssuer` objects are
+      scanned alongside Certificates — a `Ready=False` issuer (broken ACME account, exhausted CA
+      quota, webhook failure) surfaces immediately instead of waiting for every Certificate it
+      backs to start failing.
+- [x] full certificate detail view: click any row for the parsed subject/issuer DN, serial,
+      SANs, signature/public-key algorithm, SHA-1/SHA-256 fingerprints, key/extended-key usage,
+      OCSP/CRL URLs, and the full certificate chain (`GET /api/certs/detail`).
+- [x] one-click reissue: a **Force reissue** button on an unhealthy cert-manager certificate
+      triggers a real reissuance (the same `Issuing: True` condition mechanism `cmctl renew`
+      uses) directly from the dashboard, instead of just reporting the stuck Certificate.
 - [x] webhook alerting (Slack/ServiceNow/custom JSON POST) on flagged rows
 - [x] Prometheus exposition export (`cert_expiry_days` gauge)
 - [x] historical run diffing (SQLite) — track expiry trend, not just point-in-time snapshot:
@@ -159,12 +178,18 @@ MVP.
 - [x] full UI parity with the CLI — nothing is CLI-only anymore:
       a **Settings** panel makes `--warn-days`, `--include-secrets`, and the webhook URL
       live-editable (no restart), with a "Send test alert now" button (`POST /api/alert`) that
-      posts the current flagged rows through `pkg/alert.Send`; a **History** panel records a
-      snapshot and shows the diff since the last one (`POST /api/history/record`,
-      `GET /api/history/diff`, backed by the same `--db` SQLite store `history diff` uses); and a
-      **Check CT logs** panel runs the same Certificate Transparency check as `certhealthz ct`
-      (`POST /api/ct`), cross-referenced against every configured dashboard cluster (startup
-      `--kubeconfig` and uploads alike), not just the CLI's flat `--kubeconfig` list.
+      posts the current flagged rows through `pkg/alert.Send`; a **History** panel is a
+      continuously recorded audit-trail feed — no manual snapshot button, the dashboard records
+      automatically on a `--record-interval` timer and shows every detected change, paginated
+      (`GET /api/history/events`, backed by the same `--db` SQLite store `history diff` uses,
+      pruned on a `--history-retention` window); and a **Check CT logs** panel runs the same
+      Certificate Transparency check as `certhealthz ct` (`POST /api/ct`), cross-referenced
+      against every configured dashboard cluster (startup `--kubeconfig` and uploads alike), not
+      just the CLI's flat `--kubeconfig` list.
+- [x] redesigned dashboard: a new **Overview** homepage (cluster/endpoint/certificate counts,
+      status breakdown, a "needs attention" list linking straight into a cert's detail view) is
+      now the default landing page, and every page shares one sans-serif, sharp-cornered
+      architectural design system.
 
 ### Planned
 
@@ -176,14 +201,12 @@ MVP.
 
 **Trust & chain validation**
 
-- [ ] full chain validation: missing/expired intermediates, weak signature algorithm (SHA-1), undersized keys
 - [ ] OCSP/CRL revocation status check
 - [ ] issuer-change anomaly detection (cert for a domain suddenly issued by an unexpected CA)
 
 **Root cause & remediation**
 
 - [ ] renewal failure root-cause hints (rate-limit hit, DNS-01 challenge broken, webhook misconfig)
-- [ ] one-shot remediation: trigger cert-manager re-issuance directly (`certhealthz fix <name>`) instead of just reporting the stuck Certificate
 - [ ] admission webhook: warn or block on an Ingress/Gateway referencing an already-expiring cert
 
 **Alerting & workflow**
