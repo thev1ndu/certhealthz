@@ -121,6 +121,8 @@ certhealthz ct example.com --kubeconfig ~/.kube/prod --since 24h
 | `--record-interval` | `ui`                  | how often the dashboard automatically records a scan to the audit log (default `15m`)                          |
 | `--history-retention` | `ui`                | how long recorded runs are kept before pruning; `0` disables pruning (default `720h`)                          |
 | `--addr`            | `ui`                 | address to serve the dashboard on (default `:8090`)                                                            |
+| `--ct-domains`      | `ui`                 | repeatable, domain to periodically check CT logs for on `--ct-interval`; unset disables CT monitoring          |
+| `--ct-interval`     | `ui`                 | how often to check `--ct-domains` against CT logs (default `6h`)                                               |
 
 ## Status
 
@@ -190,6 +192,22 @@ MVP.
       status breakdown, a "needs attention" list linking straight into a cert's detail view) is
       now the default landing page, and every page shares one sans-serif, sharp-cornered
       architectural design system.
+- [x] intermediate/root chain-cert expiry tracking: the bundled chain's own certs are checked for
+      expiry, not just the leaf — an intermediate a CA rotates yearly gets flagged `broken-chain`
+      even while the leaf itself still looks healthy.
+- [x] renewal failure root cause: a not-ready cert-manager `Certificate`'s row is enriched with the
+      actual ACME/webhook error from its most recent `CertificateRequest`, not just "not ready".
+- [x] private key reuse and DNS name conflict detection: Secrets across every configured cluster
+      are cross-checked for a shared public key (usually a copy-pasted key) or the same hostname
+      claimed by more than one Secret, flagged on the affected `secret` rows.
+- [x] TLS version/cipher visibility on live endpoint probes: `probe`/the dashboard's endpoint
+      probes now capture the negotiated protocol version and cipher suite, flagging anything still
+      accepting TLS 1.0/1.1 or an insecure cipher as `weak-crypto`.
+- [x] scheduled Certificate Transparency monitoring: `certhealthz ui --ct-domains` periodically
+      re-runs the same CT check as `certhealthz ct` on a `--ct-interval` timer, alerting through
+      the existing webhook when a domain isn't covered by any known cluster.
+- [x] "what breaks" blast-radius view: a certificate's detail page lists every Ingress route its
+      Secret backs, turning "this cert is expiring" into "these specific things break".
 
 ### Planned
 
@@ -206,7 +224,6 @@ MVP.
 
 **Root cause & remediation**
 
-- [ ] renewal failure root-cause hints (rate-limit hit, DNS-01 challenge broken, webhook misconfig)
 - [ ] admission webhook: warn or block on an Ingress/Gateway referencing an already-expiring cert
 
 **Alerting & workflow**
