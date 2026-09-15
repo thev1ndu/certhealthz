@@ -38,6 +38,7 @@ import (
 var certGVR = schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "certificates"}
 var issuerGVR = schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "issuers"}
 var clusterIssuerGVR = schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "clusterissuers"}
+var certificateRequestGVR = schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "certificaterequests"}
 
 // generatedCert is a self-signed leaf certificate produced for a test
 // fixture, in both x509 and tls.Certificate form.
@@ -168,6 +169,40 @@ func newCertificateCR(namespace, name, secretName string, notAfter time.Time, re
 	return obj
 }
 
+// newCertificateRequestCR builds an unstructured cert-manager.io/v1
+// CertificateRequest, matching the fields certmanager.ScanFailedRequests
+// reads: the cert-manager.io/certificate-name label linking it back to its
+// owning Certificate, and the same Ready condition shape as Certificate.
+func newCertificateRequestCR(namespace, name, certificateName string, createdAt time.Time, ready bool, failReason string) *unstructured.Unstructured {
+	condStatus := "False"
+	if ready {
+		condStatus = "True"
+	}
+	return &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "cert-manager.io/v1",
+			"kind":       "CertificateRequest",
+			"metadata": map[string]interface{}{
+				"namespace":         namespace,
+				"name":              name,
+				"creationTimestamp": createdAt.UTC().Format(time.RFC3339),
+				"labels": map[string]interface{}{
+					"cert-manager.io/certificate-name": certificateName,
+				},
+			},
+			"status": map[string]interface{}{
+				"conditions": []interface{}{
+					map[string]interface{}{
+						"type":   "Ready",
+						"status": condStatus,
+						"reason": failReason,
+					},
+				},
+			},
+		},
+	}
+}
+
 // newIssuerCR builds an unstructured cert-manager.io/v1 Issuer, matching
 // the fields readyCondition reads (status.conditions[].{type,status,reason}).
 func newIssuerCR(namespace, name string, ready bool, failReason string) *unstructured.Unstructured {
@@ -221,9 +256,10 @@ func newFakeDynamicClient(objects ...*unstructured.Unstructured) *dynamicfake.Fa
 	// from the seeded objects, so it panics on a List call when no object of
 	// that GVR was seeded at all (see e.g. the empty-cluster history test).
 	listKinds := map[schema.GroupVersionResource]string{
-		certGVR:          "CertificateList",
-		issuerGVR:        "IssuerList",
-		clusterIssuerGVR: "ClusterIssuerList",
+		certGVR:               "CertificateList",
+		issuerGVR:             "IssuerList",
+		clusterIssuerGVR:      "ClusterIssuerList",
+		certificateRequestGVR: "CertificateRequestList",
 	}
 	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds, objs...)
 }
@@ -236,7 +272,11 @@ func newFakeTypedClient(objs ...runtime.Object) kubernetes.Interface {
 }
 
 // newIngress builds an Ingress with a single TLS block, matching the shape
-// ingress.Scan reads (spec.tls[].secretName, spec.tls[].hosts).
+// ingress.Scan reads (spec.tls[].secretName, spec.tls[].hosts). namespace is
+// a real, independent parameter that every current caller just happens to
+// pass "ns1" for (see newCertificateCR's doc comment for the same pattern).
+//
+//nolint:unparam
 func newIngress(namespace, name, secretName string, hosts ...string) *networkingv1.Ingress {
 	return &networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},

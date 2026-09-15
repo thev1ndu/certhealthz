@@ -255,6 +255,21 @@ export default function CertDetailPage({ id, row, onBack }) {
             </div>
           </Section>
 
+          {detail.backedRoutes?.length > 0 && (
+            <div className="md:col-span-2">
+              <Section title="Backs">
+                <div className="flex flex-col gap-3">
+                  {detail.backedRoutes.map((route, i) => (
+                    <div key={i} className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                      <span className="text-sm font-medium">{route.ingress}</span>
+                      <TagList items={route.hosts} />
+                    </div>
+                  ))}
+                </div>
+              </Section>
+            </div>
+          )}
+
           <div className="md:col-span-2">
             <Section title="Certificate chain">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

@@ -49,6 +49,8 @@ var (
 	uiDBPath           string
 	uiRecordInterval   time.Duration
 	uiHistoryRetention time.Duration
+	uiCTDomains        []string
+	uiCTInterval       time.Duration
 )
 
 // ClusterEntry identifies one cluster the dashboard scans. Kubeconfig is
@@ -382,6 +384,8 @@ func init() {
 	uiCmd.Flags().StringVar(&uiDBPath, "db", defaultDBPath(), "path to the SQLite database used by the dashboard's audit log and persisted settings")
 	uiCmd.Flags().DurationVar(&uiRecordInterval, "record-interval", 15*time.Minute, "how often the dashboard automatically records a scan to the audit log")
 	uiCmd.Flags().DurationVar(&uiHistoryRetention, "history-retention", 720*time.Hour, "how long recorded runs are kept before being pruned; 0 disables pruning")
+	uiCmd.Flags().StringSliceVar(&uiCTDomains, "ct-domains", nil, "domain to periodically check Certificate Transparency logs for; repeat flag for multiple. Unset disables CT monitoring")
+	uiCmd.Flags().DurationVar(&uiCTInterval, "ct-interval", 6*time.Hour, "how often to check --ct-domains against CT logs")
 	rootCmd.AddCommand(uiCmd)
 }
 
@@ -1089,6 +1093,10 @@ func runUI(_ *cobra.Command, _ []string) error {
 	store.SetRetention(uiHistoryRetention)
 	go autoRecordHistory(collect, store, uiRecordInterval)
 
+	if len(uiCTDomains) > 0 {
+		go autoCheckCT(uiClusters, uiSettings, uiCTDomains, uiCTInterval)
+	}
+
 	fmt.Printf("certhealthz ui listening on %s\n", uiAddr)
 	server := &http.Server{
 		Addr:              uiAddr,
@@ -1122,5 +1130,38 @@ func autoRecordHistory(collect func(context.Context) ([]output.Row, error), stor
 	defer ticker.Stop()
 	for range ticker.C {
 		record()
+	}
+}
+
+// autoCheckCT periodically checks domains against Certificate Transparency
+// logs, mirroring autoRecordHistory's ticker shape (run once immediately,
+// then on every interval tick). Unlike history recording, CT findings
+// aren't persisted to the audit log — that store's shape is a scan-snapshot
+// diff, not a one-off discovery event — so a flagged (possible
+// shadow/rogue issuance) result is instead sent through the same
+// alert.Send webhook mechanism already used for flagged scan rows. since is
+// widened to 2*interval so nothing is missed right at a tick boundary.
+func autoCheckCT(clusters *ClusterRegistry, settings *Settings, domains []string, interval time.Duration) {
+	check := func() {
+		ctx := context.Background()
+		warnDays, _, webhookURL := settings.Get()
+		known := uiKnownDNSNames(ctx, clusters)
+		rows := ctRows(ctx, domains, 2*interval, warnDays, known)
+
+		flagged := alert.Flagged(rows)
+		if len(flagged) == 0 || webhookURL == "" {
+			return
+		}
+		if err := alert.Send(webhookURL, rows); err != nil {
+			log.Printf("sending CT alert: %v", err)
+		}
+	}
+
+	check()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		check()
 	}
 }

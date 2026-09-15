@@ -72,6 +72,31 @@ type apiCertDetail struct {
 	ChainIssue   string `json:"chainIssue,omitempty"`
 
 	Chain []apiChainCert `json:"chain"`
+
+	// BackedRoutes lists every Ingress route this certificate's Secret
+	// backs — "what breaks" if this cert is expiring or fails to renew.
+	// Only populated for the "secret"/"cert-manager" sources (an Ingress
+	// row already is a route; an endpoint probe isn't Kubernetes-owned).
+	BackedRoutes []apiBackedRoute `json:"backedRoutes,omitempty"`
+}
+
+// apiBackedRoute is one Ingress route (and its hosts) that a certificate's
+// Secret backs, in the certificate detail response's BackedRoutes.
+type apiBackedRoute struct {
+	Ingress string   `json:"ingress"`
+	Hosts   []string `json:"hosts"`
+}
+
+// backedRoutes filters routes down to the ones a given namespace+Secret
+// actually back, for the certificate detail page's blast-radius view.
+func backedRoutes(routes []ingress.Route, namespace, secretName string) []apiBackedRoute {
+	var out []apiBackedRoute
+	for _, route := range routes {
+		if route.Namespace == namespace && route.SecretName == secretName {
+			out = append(out, apiBackedRoute{Ingress: route.Ingress, Hosts: route.Hosts})
+		}
+	}
+	return out
 }
 
 var keyUsageNames = map[x509.KeyUsage]string{
@@ -269,6 +294,9 @@ func handleCertDetail(deps UIDeps, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		detail = certToDetail(id, leaf, chain)
+		if routes, err := ingress.Scan(ctx, cc.Label, cc.Typed); err == nil {
+			detail.BackedRoutes = backedRoutes(routes, id.Namespace, id.Name)
+		}
 
 	case "cert-manager":
 		cc, err := deps.ClusterClientsFor(id.Cluster)
@@ -305,6 +333,9 @@ func handleCertDetail(deps UIDeps, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		detail = certToDetail(id, leaf, chain)
+		if routes, err := ingress.Scan(ctx, cc.Label, cc.Typed); err == nil {
+			detail.BackedRoutes = backedRoutes(routes, id.Namespace, secretName)
+		}
 
 	case "ingress":
 		cc, err := deps.ClusterClientsFor(id.Cluster)

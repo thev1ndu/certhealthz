@@ -26,6 +26,15 @@ func TestProbeEndToEnd(t *testing.T) {
 	if result.Issuer != "127.0.0.1" {
 		t.Errorf("expected issuer CN 127.0.0.1, got %q", result.Issuer)
 	}
+	if result.TLSVersion == "" {
+		t.Error("expected a non-empty negotiated TLSVersion")
+	}
+	if result.CipherSuite == "" {
+		t.Error("expected a non-empty negotiated CipherSuite")
+	}
+	if result.WeakTLS {
+		t.Errorf("expected a default Go TLS server/client handshake to negotiate TLS 1.2+, got weak: %s", result.TLSIssue)
+	}
 }
 
 // TestProbeUnreachableEndToEnd asserts a dial failure surfaces as Err rather

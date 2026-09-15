@@ -21,19 +21,26 @@ import (
 // package can decode /api/certs/detail responses the same way apiRow
 // mirrors apiRow for /api/certs.
 type apiCertDetail struct {
-	ID                 string   `json:"id"`
-	Source             string   `json:"source"`
-	Subject            string   `json:"subject"`
-	SubjectCommonName  string   `json:"subjectCommonName"`
-	Issuer             string   `json:"issuer"`
-	IssuerCommonName   string   `json:"issuerCommonName"`
-	SerialNumber       string   `json:"serialNumber"`
-	DNSNames           []string `json:"dnsNames"`
-	SignatureAlgorithm string   `json:"signatureAlgorithm"`
-	PublicKeyAlgorithm string   `json:"publicKeyAlgorithm"`
-	PublicKeyBits      int      `json:"publicKeyBits"`
-	FingerprintSHA256  string   `json:"fingerprintSha256"`
-	IsCA               bool     `json:"isCA"`
+	ID                 string           `json:"id"`
+	Source             string           `json:"source"`
+	Subject            string           `json:"subject"`
+	SubjectCommonName  string           `json:"subjectCommonName"`
+	Issuer             string           `json:"issuer"`
+	IssuerCommonName   string           `json:"issuerCommonName"`
+	SerialNumber       string           `json:"serialNumber"`
+	DNSNames           []string         `json:"dnsNames"`
+	SignatureAlgorithm string           `json:"signatureAlgorithm"`
+	PublicKeyAlgorithm string           `json:"publicKeyAlgorithm"`
+	PublicKeyBits      int              `json:"publicKeyBits"`
+	FingerprintSHA256  string           `json:"fingerprintSha256"`
+	IsCA               bool             `json:"isCA"`
+	BackedRoutes       []apiBackedRoute `json:"backedRoutes"`
+}
+
+// apiBackedRoute mirrors cmd's (unexported) apiBackedRoute type.
+type apiBackedRoute struct {
+	Ingress string   `json:"ingress"`
+	Hosts   []string `json:"hosts"`
 }
 
 // TestCertDetailEndToEnd wires cmd.NewUIMux with a fake cert-manager
@@ -51,6 +58,7 @@ func TestCertDetailEndToEnd(t *testing.T) {
 	typed := newFakeTypedClient(
 		newTLSSecret("managed-cert-tls", managedCert),
 		newTLSSecret("raw-secret-tls", secretCert),
+		newIngress("ns1", "managed-cert-ingress", "managed-cert-tls", "managed.example.com"),
 	)
 	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
 
@@ -119,6 +127,14 @@ func TestCertDetailEndToEnd(t *testing.T) {
 		}
 		if detail.SerialNumber == "" {
 			t.Errorf("%s: expected non-empty serial number", tc.rowName)
+		}
+
+		if tc.rowName == "managed-cert" {
+			if len(detail.BackedRoutes) != 1 || detail.BackedRoutes[0].Ingress != "managed-cert-ingress" {
+				t.Errorf("%s: expected blast-radius to name managed-cert-ingress, got %+v", tc.rowName, detail.BackedRoutes)
+			}
+		} else if len(detail.BackedRoutes) != 0 {
+			t.Errorf("%s: expected no backed routes (no Ingress uses its Secret), got %+v", tc.rowName, detail.BackedRoutes)
 		}
 	}
 }

@@ -6,7 +6,9 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"strings"
@@ -34,6 +36,21 @@ type SecretCert struct {
 	ChainIssue  string
 	WeakCrypto  bool
 	CryptoIssue string
+
+	// ChainExpiry is the soonest NotAfter among the bundled chain's
+	// intermediate/root certs (zero if the chain has none) — the leaf's own
+	// NotAfter can look healthy for months while an intermediate the CA
+	// rotates yearly is about to expire and break trust for the whole chain.
+	// ChainExpirySubject names which chain cert that is. Left as raw facts
+	// here (no warnDays judgment) so cmd/collect.go's classifySecret decides
+	// urgency, same split as ChainOK/WeakCrypto.
+	ChainExpiry        time.Time
+	ChainExpirySubject string
+
+	// PublicKeyHash is the hex SHA-256 of the leaf's SubjectPublicKeyInfo,
+	// used to detect the same private key reused across unrelated Secrets
+	// (usually a copy-pasted key rather than a freshly issued one).
+	PublicKeyHash string
 }
 
 // ScanSecrets lists every kubernetes.io/tls Secret and parses its leaf
@@ -74,8 +91,29 @@ func parseSecret(cluster string, s corev1.Secret) (SecretCert, bool) {
 	pubAlg, pubBits := PublicKeyDetail(leaf.PublicKey)
 	sc.WeakCrypto, sc.CryptoIssue = WeakCryptoIssue(pubAlg, pubBits, leaf.SignatureAlgorithm.String())
 	sc.ChainOK, sc.ChainIssue = VerifyChain(leaf, chain)
+	sc.ChainExpiry, sc.ChainExpirySubject = soonestChainExpiry(chain)
+
+	if der, err := x509.MarshalPKIXPublicKey(leaf.PublicKey); err == nil {
+		sum := sha256.Sum256(der)
+		sc.PublicKeyHash = hex.EncodeToString(sum[:])
+	}
 
 	return sc, true
+}
+
+// soonestChainExpiry returns the earliest NotAfter among a bundled chain's
+// intermediate/root certs and that cert's subject CN, or a zero time and
+// empty string if the chain has none.
+func soonestChainExpiry(chain []*x509.Certificate) (time.Time, string) {
+	var soonest time.Time
+	var subject string
+	for _, c := range chain {
+		if soonest.IsZero() || c.NotAfter.Before(soonest) {
+			soonest = c.NotAfter
+			subject = c.Subject.CommonName
+		}
+	}
+	return soonest, subject
 }
 
 // ParseSecretChain decodes every PEM block in a kubernetes.io/tls Secret's

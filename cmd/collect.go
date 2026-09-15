@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/thev1ndu/certhealthz/pkg/certmanager"
@@ -13,6 +15,21 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
+
+// warnScan logs a scan-step failure, unless it's just the caller's context
+// being canceled or timing out — that means the client (a browser
+// navigating away mid-scan, or a shutting-down server) walked away, not
+// that anything actually broke, so it's not worth alarming an operator
+// over. /api/certs' collect closure runs several of these sequentially per
+// cluster (certs, issuers, clusterissuers, secrets, ingress); a request
+// abandoned partway through would otherwise print a "warning:" for every
+// step still in flight when the cancellation lands.
+func warnScan(err error) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+}
 
 // ClusterClients bundles the clients CollectRowsFromClients needs for one
 // cluster, decoupling the scan loop from how those clients were built —
@@ -131,6 +148,7 @@ func collectRows(ctx context.Context, kubeconfigs []string, warnDays int, includ
 // clientsets instead of a real cluster.
 func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnDays int, includeSecrets bool) ([]output.Row, error) {
 	var rows []output.Row
+	var allSecrets []certmanager.SecretCert
 
 	for _, target := range targets {
 		clusterLabel := target.Label
@@ -144,17 +162,23 @@ func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnD
 			var err error
 			secrets, err = certmanager.ScanSecrets(ctx, clusterLabel, target.Typed)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+				warnScan(err)
 			}
 			secretsByKey = make(map[string]certmanager.SecretCert, len(secrets))
 			for _, s := range secrets {
 				secretsByKey[s.Namespace+"/"+s.Name] = s
 			}
+			allSecrets = append(allSecrets, secrets...)
+		}
+
+		reqFailures, err := certmanager.ScanFailedRequests(ctx, clusterLabel, target.Dyn)
+		if err != nil {
+			warnScan(err)
 		}
 
 		certs, err := certmanager.Scan(ctx, clusterLabel, target.Dyn)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+			warnScan(err)
 		}
 		for _, c := range certs {
 			status := "ok"
@@ -163,6 +187,9 @@ func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnD
 			case !c.Ready:
 				status = "error"
 				detail = "not ready: " + c.FailReason
+				if reason, ok := reqFailures[c.Namespace+"/"+c.Name]; ok {
+					detail += fmt.Sprintf(" (CertificateRequest: %s)", reason)
+				}
 			case includeSecrets:
 				if drifted, why := certmanager.CheckDrift(c, secretsByKey); drifted {
 					status = "drift"
@@ -195,13 +222,13 @@ func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnD
 
 		issuers, err := certmanager.ScanIssuers(ctx, clusterLabel, target.Dyn)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+			warnScan(err)
 		}
 		rows = append(rows, issuerRows(issuers)...)
 
 		clusterIssuers, err := certmanager.ScanClusterIssuers(ctx, clusterLabel, target.Dyn)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+			warnScan(err)
 		}
 		rows = append(rows, issuerRows(clusterIssuers)...)
 
@@ -220,9 +247,25 @@ func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnD
 
 			routes, err := ingress.Scan(ctx, clusterLabel, target.Typed)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+				warnScan(err)
 			}
 			rows = append(rows, ingressRoutesRows(routes, secretsByKey, warnDays)...)
+		}
+	}
+
+	if len(allSecrets) > 0 {
+		findings := crossSecretFindings(allSecrets)
+		for i := range rows {
+			if rows[i].Source != "secret" {
+				continue
+			}
+			if extra, ok := findings[rows[i].Namespace+"/"+rows[i].Name]; ok {
+				if rows[i].Detail != "" {
+					rows[i].Detail += " | " + extra
+				} else {
+					rows[i].Detail = extra
+				}
+			}
 		}
 	}
 
@@ -250,6 +293,10 @@ func probeRows(endpoints []string, timeout time.Duration, warnDays int) []output
 		}
 		row.NotAfter = r.NotAfter
 		row = output.Classify(row, warnDays)
+		if row.Status != "expired" && row.Status != "error" && r.WeakTLS {
+			row.Status = "weak-crypto"
+			row.Detail = r.TLSIssue
+		}
 		rows = append(rows, row)
 	}
 	return rows
@@ -296,6 +343,9 @@ func classifySecret(row output.Row, sc certmanager.SecretCert, warnDays int) out
 		return row
 	}
 	switch {
+	case !sc.ChainExpiry.IsZero() && time.Until(sc.ChainExpiry) <= time.Duration(warnDays)*24*time.Hour:
+		row.Status = "broken-chain"
+		row.Detail = fmt.Sprintf("chain certificate %q expires %s", sc.ChainExpirySubject, sc.ChainExpiry.Format(time.RFC3339))
 	case !sc.ChainOK:
 		row.Status = "broken-chain"
 		row.Detail = sc.ChainIssue
@@ -304,6 +354,77 @@ func classifySecret(row output.Row, sc certmanager.SecretCert, warnDays int) out
 		row.Detail = sc.CryptoIssue
 	}
 	return row
+}
+
+// crossSecretFindings computes cross-Secret integrity findings — private
+// key reuse and DNS name conflicts — that only make sense once every
+// cluster's Secrets are known at once, unlike the per-secret checks in
+// classifySecret. Returns extra Detail text keyed by "namespace/name",
+// appended (not overriding Status) onto the matching "secret" row.
+func crossSecretFindings(secrets []certmanager.SecretCert) map[string]string {
+	byKeyHash := make(map[string][]string) // hash -> "namespace/name"
+	byDNSName := make(map[string][]string) // dns name -> "namespace/name"
+	for _, s := range secrets {
+		key := s.Namespace + "/" + s.Name
+		if s.PublicKeyHash != "" {
+			byKeyHash[s.PublicKeyHash] = append(byKeyHash[s.PublicKeyHash], key)
+		}
+		for _, name := range s.DNSNames {
+			byDNSName[name] = append(byDNSName[name], key)
+		}
+	}
+
+	findings := make(map[string]string)
+	appendFinding := func(key, text string) {
+		if findings[key] != "" {
+			findings[key] += " | " + text
+		} else {
+			findings[key] = text
+		}
+	}
+
+	for _, keys := range byKeyHash {
+		if len(keys) < 2 {
+			continue
+		}
+		for _, key := range keys {
+			others := otherKeys(keys, key)
+			appendFinding(key, fmt.Sprintf("shares a private key with: %s", strings.Join(others, ", ")))
+		}
+	}
+	for dnsName, keys := range byDNSName {
+		unique := uniqueStrings(keys)
+		if len(unique) < 2 {
+			continue
+		}
+		for _, key := range unique {
+			others := otherKeys(unique, key)
+			appendFinding(key, fmt.Sprintf("hostname %s also claimed by: %s", dnsName, strings.Join(others, ", ")))
+		}
+	}
+	return findings
+}
+
+func otherKeys(keys []string, exclude string) []string {
+	out := make([]string, 0, len(keys)-1)
+	for _, k := range keys {
+		if k != exclude {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+func uniqueStrings(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // ingressRoutesRows cross-checks each Ingress TLS route against its backing
