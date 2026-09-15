@@ -74,7 +74,7 @@ func TestPrivateKeyReuseEndToEnd(t *testing.T) {
 	typed := newFakeTypedClient(secretA, secretB)
 	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
 
-	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true)
+	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil)
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestDNSNameConflictEndToEnd(t *testing.T) {
 	typed := newFakeTypedClient(secretA, secretB)
 	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
 
-	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true)
+	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil)
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestChainCertExpiryEndToEnd(t *testing.T) {
 	typed := newFakeTypedClient(secret)
 	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
 
-	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true)
+	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil)
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
@@ -229,6 +229,104 @@ func genCAForE2E(t *testing.T, cn string) (*x509.Certificate, *ecdsa.PrivateKey)
 	return tmpl, key
 }
 
+// TestOrphanedSecretEndToEnd seeds a Secret with no owning Certificate and
+// no Ingress route referencing it, alongside a normal Certificate-backed
+// Secret, and asserts only the truly unreferenced one is flagged orphaned.
+func TestOrphanedSecretEndToEnd(t *testing.T) {
+	ctx := context.Background()
+
+	managedCert := generateCert(t, "managed.example.com", time.Now().Add(60*24*time.Hour))
+	orphanCert := generateCert(t, "orphan.example.com", time.Now().Add(60*24*time.Hour))
+
+	certCR := newCertificateCR("ns1", "managed-cert", "managed-cert-tls", managedCert.Leaf.NotAfter, true, "")
+	dyn := newFakeDynamicClient(certCR)
+	typed := newFakeTypedClient(
+		newTLSSecret("managed-cert-tls", managedCert),
+		newTLSSecret("orphan-tls", orphanCert),
+	)
+	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
+
+	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+
+	details := make(map[string]string)
+	for _, r := range rows {
+		if r.Source == "secret" {
+			details[r.Name] = r.Detail
+		}
+	}
+
+	if detail, ok := details["managed-cert-tls"]; !ok {
+		t.Fatal("expected a secret row for managed-cert-tls")
+	} else if strings.Contains(detail, "orphaned") {
+		t.Errorf("expected managed-cert-tls (owned by a Certificate) not to be flagged orphaned, got %q", detail)
+	}
+
+	detail, ok := details["orphan-tls"]
+	if !ok {
+		t.Fatal("expected a secret row for orphan-tls")
+	}
+	if !strings.Contains(detail, "orphaned: no Certificate or Ingress references this Secret") {
+		t.Errorf("expected orphan-tls to be flagged orphaned, got %q", detail)
+	}
+}
+
+// TestRequiredLabelEndToEnd seeds a cert-manager Certificate missing a
+// required label alongside one carrying it, and asserts only the
+// non-compliant one is flagged — a compliance-review hook, not a
+// status-changing finding.
+func TestRequiredLabelEndToEnd(t *testing.T) {
+	ctx := context.Background()
+
+	cert := generateCert(t, "compliant.example.com", time.Now().Add(60*24*time.Hour))
+	compliantCR := newCertificateCR("ns1", "compliant-cert", "compliant-cert-tls", cert.Leaf.NotAfter, true, "")
+	compliantCR.SetLabels(map[string]string{"team": "platform", "environment": "prod"})
+
+	nonCompliantCert := generateCert(t, "noncompliant.example.com", time.Now().Add(60*24*time.Hour))
+	nonCompliantCR := newCertificateCR("ns1", "noncompliant-cert", "noncompliant-cert-tls", nonCompliantCert.Leaf.NotAfter, true, "")
+	nonCompliantCR.SetLabels(map[string]string{"team": "platform"})
+
+	dyn := newFakeDynamicClient(compliantCR, nonCompliantCR)
+	typed := newFakeTypedClient(
+		newTLSSecret("compliant-cert-tls", cert),
+		newTLSSecret("noncompliant-cert-tls", nonCompliantCert),
+	)
+	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
+
+	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, []string{"team", "environment"})
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+
+	details := make(map[string]string)
+	statuses := make(map[string]string)
+	for _, r := range rows {
+		if r.Source == "cert-manager" {
+			details[r.Name] = r.Detail
+			statuses[r.Name] = r.Status
+		}
+	}
+
+	if detail, ok := details["compliant-cert"]; !ok {
+		t.Fatal("expected a cert-manager row for compliant-cert")
+	} else if strings.Contains(detail, "missing required label") {
+		t.Errorf("expected compliant-cert (has both labels) not to be flagged, got %q", detail)
+	}
+
+	detail, ok := details["noncompliant-cert"]
+	if !ok {
+		t.Fatal("expected a cert-manager row for noncompliant-cert")
+	}
+	if !strings.Contains(detail, "missing required label(s): environment") {
+		t.Errorf("expected noncompliant-cert to be flagged missing the environment label, got %q", detail)
+	}
+	if statuses["noncompliant-cert"] != "ok" {
+		t.Errorf("expected a missing-label finding to stay Detail-only (status ok), got status %q", statuses["noncompliant-cert"])
+	}
+}
+
 // TestCertificateRequestFailureEndToEnd seeds a not-ready Certificate
 // alongside its most recent CertificateRequest (which carries the real
 // ACME/webhook failure reason via the cert-manager.io/certificate-name
@@ -246,7 +344,7 @@ func TestCertificateRequestFailureEndToEnd(t *testing.T) {
 	typed := newFakeTypedClient(newTLSSecret("failing-cert-tls", cert))
 	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
 
-	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true)
+	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil)
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}

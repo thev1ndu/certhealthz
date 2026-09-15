@@ -51,6 +51,7 @@ var (
 	uiHistoryRetention time.Duration
 	uiCTDomains        []string
 	uiCTInterval       time.Duration
+	uiRequireLabels    []string
 )
 
 // ClusterEntry identifies one cluster the dashboard scans. Kubeconfig is
@@ -386,6 +387,7 @@ func init() {
 	uiCmd.Flags().DurationVar(&uiHistoryRetention, "history-retention", 720*time.Hour, "how long recorded runs are kept before being pruned; 0 disables pruning")
 	uiCmd.Flags().StringSliceVar(&uiCTDomains, "ct-domains", nil, "domain to periodically check Certificate Transparency logs for; repeat flag for multiple. Unset disables CT monitoring")
 	uiCmd.Flags().DurationVar(&uiCTInterval, "ct-interval", 6*time.Hour, "how often to check --ct-domains against CT logs")
+	uiCmd.Flags().StringSliceVar(&uiRequireLabels, "require-label", nil, "label key every cert-manager Certificate must carry (value not checked); repeat flag for multiple. Unset disables the check")
 	rootCmd.AddCommand(uiCmd)
 }
 
@@ -1068,7 +1070,7 @@ func runUI(_ *cobra.Command, _ []string) error {
 			return nil, err
 		}
 
-		rows, err := CollectRowsFromClients(ctx, clients, warnDays, includeSecrets)
+		rows, err := CollectRowsFromClients(ctx, clients, warnDays, includeSecrets, uiRequireLabels)
 		if err != nil {
 			return nil, err
 		}

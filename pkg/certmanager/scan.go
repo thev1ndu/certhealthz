@@ -28,6 +28,11 @@ type Certificate struct {
 	NotAfter    time.Time
 	RenewalTime time.Time
 	FailReason  string
+	// Labels are the Certificate object's own metadata.labels, used to
+	// check operator-defined naming/ownership conventions (e.g. a required
+	// "team" or "environment" label) — not anything cert-manager itself
+	// writes or reads.
+	Labels map[string]string
 }
 
 // Scan lists all cert-manager Certificate resources visible via the given
@@ -50,6 +55,7 @@ func flatten(cluster string, u unstructured.Unstructured) Certificate {
 		Cluster:   cluster,
 		Namespace: u.GetNamespace(),
 		Name:      u.GetName(),
+		Labels:    u.GetLabels(),
 	}
 
 	secretName, _, _ := unstructured.NestedString(u.Object, "spec", "secretName")

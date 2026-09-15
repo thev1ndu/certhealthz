@@ -123,6 +123,7 @@ certhealthz ct example.com --kubeconfig ~/.kube/prod --since 24h
 | `--addr`            | `ui`                 | address to serve the dashboard on (default `:8090`)                                                            |
 | `--ct-domains`      | `ui`                 | repeatable, domain to periodically check CT logs for on `--ct-interval`; unset disables CT monitoring          |
 | `--ct-interval`     | `ui`                 | how often to check `--ct-domains` against CT logs (default `6h`)                                               |
+| `--require-label`   | `scan`, `ui`         | repeatable, label key every cert-manager Certificate must carry (value not checked); unset disables the check  |
 
 ## Status
 
@@ -208,6 +209,12 @@ MVP.
       the existing webhook when a domain isn't covered by any known cluster.
 - [x] "what breaks" blast-radius view: a certificate's detail page lists every Ingress route its
       Secret backs, turning "this cert is expiring" into "these specific things break".
+- [x] orphaned Secret detection: a `kubernetes.io/tls` Secret referenced by no cert-manager
+      Certificate and no Ingress route is flagged as dead weight — the inverse of the blast-radius
+      check above.
+- [x] naming/label convention drift: `--require-label` (repeatable, `scan`/`ui`) flags any
+      cert-manager Certificate missing an operator-required label key, for compliance-review
+      teams enforcing an ownership/environment tagging policy.
 
 ### Planned
 

@@ -63,7 +63,7 @@ func TestCertDetailEndToEnd(t *testing.T) {
 	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
 
 	collect := func(ctx context.Context) ([]output.Row, error) {
-		return cmd.CollectRowsFromClients(ctx, targets, warnDays, true)
+		return cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil)
 	}
 
 	uiHandler, err := ui.Handler()

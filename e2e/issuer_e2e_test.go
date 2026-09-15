@@ -37,7 +37,7 @@ func TestIssuerHealthEndToEnd(t *testing.T) {
 	typed := newFakeTypedClient(newTLSSecret("tracked-cert-tls", cert))
 	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
 
-	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true)
+	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil)
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestSANDriftEndToEnd(t *testing.T) {
 	typed := newFakeTypedClient(newTLSSecret("san-drift-cert-tls", cert))
 	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
 
-	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true)
+	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil)
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}

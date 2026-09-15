@@ -32,7 +32,7 @@ func TestIngressCrossReferenceEndToEnd(t *testing.T) {
 		{Label: "test-cluster", Dyn: dyn, Typed: typed},
 	}
 
-	rows, err := cmd.CollectRowsFromClients(context.Background(), targets, warnDays, true)
+	rows, err := cmd.CollectRowsFromClients(context.Background(), targets, warnDays, true, nil)
 	if err != nil {
 		t.Fatalf("CollectRowsFromClients: %v", err)
 	}

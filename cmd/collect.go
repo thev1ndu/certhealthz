@@ -118,7 +118,7 @@ func buildAllClusterClients(entries []ClusterEntry, includeSecrets bool) ([]Clus
 // requested, raw kubernetes.io/tls Secrets, returning a unified, sorted
 // list of rows. It's shared by `scan` and `dashboard` so both report the
 // same data the same way.
-func collectRows(ctx context.Context, kubeconfigs []string, warnDays int, includeSecrets bool) ([]output.Row, error) {
+func collectRows(ctx context.Context, kubeconfigs []string, warnDays int, includeSecrets bool, requireLabels []string) ([]output.Row, error) {
 	targets := kubeconfigs
 	if len(targets) == 0 {
 		targets = []string{""} // empty => default loading rules
@@ -139,14 +139,14 @@ func collectRows(ctx context.Context, kubeconfigs []string, warnDays int, includ
 		clients = append(clients, cc)
 	}
 
-	return CollectRowsFromClients(ctx, clients, warnDays, includeSecrets)
+	return CollectRowsFromClients(ctx, clients, warnDays, includeSecrets, requireLabels)
 }
 
 // CollectRowsFromClients runs the actual cert-manager/Secret scan and
 // classification logic against already-built clients, one per cluster. It's
 // the seam that lets e2e tests exercise the real scan pipeline against fake
 // clientsets instead of a real cluster.
-func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnDays int, includeSecrets bool) ([]output.Row, error) {
+func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnDays int, includeSecrets bool, requireLabels []string) ([]output.Row, error) {
 	var rows []output.Row
 	var allSecrets []certmanager.SecretCert
 
@@ -217,6 +217,16 @@ func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnD
 			default:
 				row = output.Classify(row, warnDays)
 			}
+			if len(requireLabels) > 0 {
+				if missing := missingLabels(c.Labels, requireLabels); len(missing) > 0 {
+					note := fmt.Sprintf("missing required label(s): %s", strings.Join(missing, ", "))
+					if row.Detail != "" {
+						row.Detail += " | " + note
+					} else {
+						row.Detail = note
+					}
+				}
+			}
 			rows = append(rows, row)
 		}
 
@@ -233,6 +243,26 @@ func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnD
 		rows = append(rows, issuerRows(clusterIssuers)...)
 
 		if includeSecrets {
+			// Scanned before the secret rows below (rather than after, as
+			// this used to run) so referencedByIngress is available in time
+			// to flag orphaned Secrets — one whose name isn't referenced by
+			// any Certificate's spec.secretName or any Ingress route is
+			// dead weight (or a forgotten manual cert).
+			routes, err := ingress.Scan(ctx, clusterLabel, target.Typed)
+			if err != nil {
+				warnScan(err)
+			}
+			referencedByIngress := make(map[string]bool, len(routes))
+			for _, route := range routes {
+				referencedByIngress[route.Namespace+"/"+route.SecretName] = true
+			}
+			referencedByCert := make(map[string]bool, len(certs))
+			for _, c := range certs {
+				if c.SecretName != "" {
+					referencedByCert[c.Namespace+"/"+c.SecretName] = true
+				}
+			}
+
 			for _, s := range secrets {
 				row := output.Row{
 					Source:    "secret",
@@ -242,13 +272,18 @@ func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnD
 					NotAfter:  s.NotAfter,
 				}
 				row = classifySecret(row, s, warnDays)
+				key := s.Namespace + "/" + s.Name
+				if !referencedByCert[key] && !referencedByIngress[key] {
+					note := "orphaned: no Certificate or Ingress references this Secret"
+					if row.Detail != "" {
+						row.Detail += " | " + note
+					} else {
+						row.Detail = note
+					}
+				}
 				rows = append(rows, row)
 			}
 
-			routes, err := ingress.Scan(ctx, clusterLabel, target.Typed)
-			if err != nil {
-				warnScan(err)
-			}
 			rows = append(rows, ingressRoutesRows(routes, secretsByKey, warnDays)...)
 		}
 	}
@@ -403,6 +438,19 @@ func crossSecretFindings(secrets []certmanager.SecretCert) map[string]string {
 		}
 	}
 	return findings
+}
+
+// missingLabels returns which of the required label keys aren't present on
+// labels, in the order given (values aren't checked — presence is the
+// whole policy). Returns nil if every required key is present.
+func missingLabels(labels map[string]string, required []string) []string {
+	var missing []string
+	for _, key := range required {
+		if _, ok := labels[key]; !ok {
+			missing = append(missing, key)
+		}
+	}
+	return missing
 }
 
 func otherKeys(keys []string, exclude string) []string {

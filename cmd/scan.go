@@ -12,12 +12,13 @@ import (
 )
 
 var (
-	scanWarnDays   int
-	scanWebhookURL string
-	scanPrometheus bool
-	scanIncludeRaw bool
-	scanRecord     bool
-	scanDBPath     string
+	scanWarnDays      int
+	scanWebhookURL    string
+	scanPrometheus    bool
+	scanIncludeRaw    bool
+	scanRecord        bool
+	scanDBPath        string
+	scanRequireLabels []string
 )
 
 var scanCmd = &cobra.Command{
@@ -33,13 +34,14 @@ func init() {
 	scanCmd.Flags().BoolVar(&scanIncludeRaw, "include-secrets", true, "also scan raw kubernetes.io/tls Secrets, for Certificate drift detection and Ingress cross-referencing")
 	scanCmd.Flags().BoolVar(&scanRecord, "record", false, "persist this scan to the history database for trend diffing (see: certhealthz history diff)")
 	scanCmd.Flags().StringVar(&scanDBPath, "db", defaultDBPath(), "path to the SQLite database used by --record and history diff")
+	scanCmd.Flags().StringSliceVar(&scanRequireLabels, "require-label", nil, "label key every cert-manager Certificate must carry (value not checked); repeat flag for multiple. Unset disables the check")
 	rootCmd.AddCommand(scanCmd)
 }
 
 func runScan(_ *cobra.Command, _ []string) error {
 	ctx := context.Background()
 
-	rows, err := collectRows(ctx, kubeconfigPaths, scanWarnDays, scanIncludeRaw)
+	rows, err := collectRows(ctx, kubeconfigPaths, scanWarnDays, scanIncludeRaw, scanRequireLabels)
 	if err != nil {
 		return err
 	}

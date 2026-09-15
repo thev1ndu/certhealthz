@@ -37,7 +37,7 @@ func TestHistoryRoundTripEndToEnd(t *testing.T) {
 	)
 	run1Targets := []cmd.ClusterClients{{Label: "prod", Dyn: run1Dyn, Typed: run1Typed}}
 
-	run1Rows, err := cmd.CollectRowsFromClients(ctx, run1Targets, warnDays, true)
+	run1Rows, err := cmd.CollectRowsFromClients(ctx, run1Targets, warnDays, true, nil)
 	if err != nil {
 		t.Fatalf("collect run1: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestHistoryRoundTripEndToEnd(t *testing.T) {
 	)
 	run2Targets := []cmd.ClusterClients{{Label: "prod", Dyn: run2Dyn, Typed: run2Typed}}
 
-	run2Rows, err := cmd.CollectRowsFromClients(ctx, run2Targets, warnDays, true)
+	run2Rows, err := cmd.CollectRowsFromClients(ctx, run2Targets, warnDays, true, nil)
 	if err != nil {
 		t.Fatalf("collect run2: %v", err)
 	}
