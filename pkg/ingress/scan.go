@@ -49,6 +49,43 @@ func Scan(ctx context.Context, cluster string, client kubernetes.Interface) ([]R
 	return routes, nil
 }
 
+// RuleHost is one Ingress rule's hostname — used (independently of any TLS
+// block) to detect an Ingress object that's still routing a host even
+// though its TLS termination has already moved elsewhere, e.g. a stale
+// Ingress left behind after a Gateway API cutover (see pkg/migration).
+type RuleHost struct {
+	Cluster   string
+	Namespace string
+	Ingress   string
+	Host      string
+}
+
+// ScanRuleHosts lists every Ingress's spec.rules[].host across all
+// namespaces, independent of whether that Ingress has a TLS block at all —
+// unlike Scan, which only reports hosts inside a TLS block.
+func ScanRuleHosts(ctx context.Context, cluster string, client kubernetes.Interface) ([]RuleHost, error) {
+	list, err := client.NetworkingV1().Ingresses("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("listing ingresses on %s: %w", cluster, err)
+	}
+
+	var hosts []RuleHost
+	for _, ing := range list.Items {
+		for _, rule := range ing.Spec.Rules {
+			if rule.Host == "" {
+				continue
+			}
+			hosts = append(hosts, RuleHost{
+				Cluster:   cluster,
+				Namespace: ing.Namespace,
+				Ingress:   ing.Name,
+				Host:      rule.Host,
+			})
+		}
+	}
+	return hosts, nil
+}
+
 // HostCovered reports whether a certificate SAN covers host — an exact
 // match, or a single-level wildcard ("*.example.com" covers "foo.example.com"
 // but not "example.com" or "foo.bar.example.com", per RFC 6125).

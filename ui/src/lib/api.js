@@ -81,3 +81,11 @@ export function getHistoryEvents({ limit, before } = {}) {
 export function checkCT(domains, since) {
   return postJSON("/api/ct", { domains, since });
 }
+
+export function getRoutes() {
+  return request("/api/routes");
+}
+
+export function getRouteCoverage() {
+  return request("/api/routes/coverage");
+}

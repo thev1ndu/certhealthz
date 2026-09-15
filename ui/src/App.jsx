@@ -1,9 +1,11 @@
 import { useState } from "react";
 import CertificatesPage from "@/components/certificates/CertificatesPage";
 import CTCheckPage from "@/components/ct/CTCheckPage";
+import EndpointsPage from "@/components/endpoints/EndpointsPage";
 import HistoryPage from "@/components/history/HistoryPage";
 import AppSidebar from "@/components/layout/AppSidebar";
 import OverviewPage from "@/components/overview/OverviewPage";
+import RoutesPage from "@/components/routes/RoutesPage";
 import SettingsPage from "@/components/settings/SettingsPage";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -37,6 +39,15 @@ export default function App() {
                 initialCertId={pendingCertId}
               />
             )}
+            {activeTab === "endpoints" && (
+              <EndpointsPage
+                certs={certs}
+                isLive={isLive}
+                reloadCerts={reloadCerts}
+                initialCertId={pendingCertId}
+              />
+            )}
+            {activeTab === "routes" && <RoutesPage />}
             {activeTab === "history" && (
               <HistoryPage isLive={isLive} active={activeTab === "history"} />
             )}

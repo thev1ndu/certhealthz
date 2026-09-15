@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/thev1ndu/certhealthz/pkg/alert"
 	"github.com/thev1ndu/certhealthz/pkg/certmanager"
+	"github.com/thev1ndu/certhealthz/pkg/cloudcert"
 	"github.com/thev1ndu/certhealthz/pkg/history"
 	"github.com/thev1ndu/certhealthz/pkg/output"
 	"github.com/thev1ndu/certhealthz/pkg/ui"
@@ -40,18 +41,22 @@ const maxSettingsBodySize = 1 << 10 // 1 KiB
 const maxCTBodySize = 16 << 10 // 16 KiB
 
 var (
-	uiAddr             string
-	uiWarnDays         int
-	uiIncludeRaw       bool
-	uiWebhookURL       string
-	uiEndpoints        []string
-	uiProbeTimeout     time.Duration
-	uiDBPath           string
-	uiRecordInterval   time.Duration
-	uiHistoryRetention time.Duration
-	uiCTDomains        []string
-	uiCTInterval       time.Duration
-	uiRequireLabels    []string
+	uiAddr               string
+	uiWarnDays           int
+	uiIncludeRaw         bool
+	uiWebhookURL         string
+	uiEndpoints          []string
+	uiProbeTimeout       time.Duration
+	uiDBPath             string
+	uiRecordInterval     time.Duration
+	uiHistoryRetention   time.Duration
+	uiCTDomains          []string
+	uiCTInterval         time.Duration
+	uiRequireLabels      []string
+	uiAWSRegions         []string
+	uiGCPProject         string
+	uiAzureVaultURLs     []string
+	uiMTLSSecretSelector []string
 )
 
 // ClusterEntry identifies one cluster the dashboard scans. Kubeconfig is
@@ -388,6 +393,10 @@ func init() {
 	uiCmd.Flags().StringSliceVar(&uiCTDomains, "ct-domains", nil, "domain to periodically check Certificate Transparency logs for; repeat flag for multiple. Unset disables CT monitoring")
 	uiCmd.Flags().DurationVar(&uiCTInterval, "ct-interval", 6*time.Hour, "how often to check --ct-domains against CT logs")
 	uiCmd.Flags().StringSliceVar(&uiRequireLabels, "require-label", nil, "label key every cert-manager Certificate must carry (value not checked); repeat flag for multiple. Unset disables the check")
+	uiCmd.Flags().StringSliceVar(&uiAWSRegions, "aws-region", nil, "AWS region to scan Certificate Manager (ACM) in, using the default AWS credential chain; repeat flag for multiple. Unset disables AWS scanning entirely")
+	uiCmd.Flags().StringVar(&uiGCPProject, "gcp-project", "", "GCP project to scan Certificate Manager in, using Application Default Credentials. Unset disables GCP scanning entirely")
+	uiCmd.Flags().StringSliceVar(&uiAzureVaultURLs, "azure-vault-url", nil, "Azure Key Vault URL to scan for certificates, using azidentity's default credential chain; repeat flag for multiple. Unset disables Azure scanning entirely")
+	uiCmd.Flags().StringSliceVar(&uiMTLSSecretSelector, "mtls-secret-selector", nil, "label selector (e.g. app=my-client) matching kubernetes.io/tls Secrets that hold mTLS client certificates, tracked separately from server certs; repeat flag for multiple. Unset disables mTLS tracking")
 	rootCmd.AddCommand(uiCmd)
 }
 
@@ -939,8 +948,8 @@ type UIDeps struct {
 // the /api/certs, /api/certs/detail, /api/certs/reissue, /api/clusters (+ DELETE
 // /api/clusters/{label}), /api/endpoints (+ DELETE /api/endpoints/{endpoint}),
 // /api/settings, /api/alert, /api/history/record, /api/history/diff,
-// /api/history/events, and
-// /api/ct endpoints.
+// /api/history/events, /api/ct, /api/routes, and /api/routes/coverage
+// endpoints.
 func NewUIMux(uiHandler http.Handler, deps UIDeps) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/certs", func(w http.ResponseWriter, r *http.Request) {
@@ -1030,6 +1039,12 @@ func NewUIMux(uiHandler http.Handler, deps UIDeps) *http.ServeMux {
 		}
 		handleCT(deps.Clusters, deps.Settings, w, r)
 	})
+	mux.HandleFunc("/api/routes", func(w http.ResponseWriter, r *http.Request) {
+		handleRoutes(deps.Clusters, w, r)
+	})
+	mux.HandleFunc("/api/routes/coverage", func(w http.ResponseWriter, r *http.Request) {
+		handleRouteCoverage(deps.Clusters, uiProbeTimeout, w, r)
+	})
 	mux.Handle("/", uiHandler)
 	return mux
 }
@@ -1070,15 +1085,38 @@ func runUI(_ *cobra.Command, _ []string) error {
 			return nil, err
 		}
 
-		rows, err := CollectRowsFromClients(ctx, clients, warnDays, includeSecrets, uiRequireLabels)
+		rows, err := CollectRowsFromClients(ctx, clients, warnDays, includeSecrets, uiRequireLabels, uiMTLSSecretSelector)
 		if err != nil {
 			return nil, err
 		}
 
 		if endpoints := uiEndpointsRegistry.All(); len(endpoints) > 0 {
 			rows = append(rows, probeRows(endpoints, uiProbeTimeout, warnDays)...)
-			output.Sort(rows)
 		}
+
+		for _, region := range uiAWSRegions {
+			if awsRows, err := cloudcert.ScanACM(ctx, region, warnDays); err != nil {
+				warnScan(err)
+			} else {
+				rows = append(rows, awsRows...)
+			}
+		}
+		if uiGCPProject != "" {
+			if gcpRows, err := cloudcert.ScanGCP(ctx, uiGCPProject, warnDays); err != nil {
+				warnScan(err)
+			} else {
+				rows = append(rows, gcpRows...)
+			}
+		}
+		for _, vaultURL := range uiAzureVaultURLs {
+			if azureRows, err := cloudcert.ScanAzureKeyVault(ctx, vaultURL, warnDays); err != nil {
+				warnScan(err)
+			} else {
+				rows = append(rows, azureRows...)
+			}
+		}
+
+		output.Sort(rows)
 		return rows, nil
 	}
 	mux := NewUIMux(uiHandler, UIDeps{

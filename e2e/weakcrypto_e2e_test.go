@@ -84,7 +84,7 @@ func TestWeakCryptoClassificationEndToEnd(t *testing.T) {
 	)
 	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
 
-	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil)
+	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil, nil)
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}

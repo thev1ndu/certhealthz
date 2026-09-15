@@ -2,8 +2,10 @@ import {
   CertificateIcon,
   ClockCounterClockwiseIcon,
   GearSixIcon,
+  GlobeIcon,
   HouseIcon,
   ShieldCheckIcon,
+  SignpostIcon,
 } from "@phosphor-icons/react";
 import {
   Sidebar,
@@ -19,9 +21,11 @@ import {
 export const TABS = [
   { id: "overview", label: "Overview", icon: HouseIcon, index: "00" },
   { id: "certificates", label: "Certificates", icon: CertificateIcon, index: "01" },
-  { id: "history", label: "History", icon: ClockCounterClockwiseIcon, index: "02" },
-  { id: "ct", label: "CT Check", icon: ShieldCheckIcon, index: "03" },
-  { id: "settings", label: "Settings", icon: GearSixIcon, index: "04" },
+  { id: "endpoints", label: "Endpoints", icon: GlobeIcon, index: "02" },
+  { id: "routes", label: "Routes", icon: SignpostIcon, index: "03" },
+  { id: "history", label: "History", icon: ClockCounterClockwiseIcon, index: "04" },
+  { id: "ct", label: "CT Check", icon: ShieldCheckIcon, index: "05" },
+  { id: "settings", label: "Settings", icon: GearSixIcon, index: "06" },
 ];
 
 export default function AppSidebar({ activeTab, onTabChange, isLive }) {

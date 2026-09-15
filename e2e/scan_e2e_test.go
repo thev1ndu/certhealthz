@@ -38,7 +38,7 @@ func TestScanEndToEnd(t *testing.T) {
 		{Label: "test-cluster", Dyn: dyn, Typed: typed},
 	}
 
-	rows, err := cmd.CollectRowsFromClients(context.Background(), targets, warnDays, true, nil)
+	rows, err := cmd.CollectRowsFromClients(context.Background(), targets, warnDays, true, nil, nil)
 	if err != nil {
 		t.Fatalf("CollectRowsFromClients: %v", err)
 	}

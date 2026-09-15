@@ -9,11 +9,15 @@ import (
 	"time"
 
 	"github.com/thev1ndu/certhealthz/pkg/certmanager"
+	"github.com/thev1ndu/certhealthz/pkg/gateway"
 	"github.com/thev1ndu/certhealthz/pkg/ingress"
+	"github.com/thev1ndu/certhealthz/pkg/mesh"
 	"github.com/thev1ndu/certhealthz/pkg/output"
 	"github.com/thev1ndu/certhealthz/pkg/probe"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+
+	gatewayclientset "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned"
 )
 
 // warnScan logs a scan-step failure, unless it's just the caller's context
@@ -35,9 +39,10 @@ func warnScan(err error) {
 // cluster, decoupling the scan loop from how those clients were built —
 // real kubeconfig-backed clients in production, fakes in e2e tests.
 type ClusterClients struct {
-	Label string
-	Dyn   dynamic.Interface
-	Typed kubernetes.Interface
+	Label   string
+	Dyn     dynamic.Interface
+	Typed   kubernetes.Interface
+	Gateway gatewayclientset.Interface
 }
 
 // buildClusterClients builds the dynamic (and, if requested, typed) client
@@ -82,6 +87,17 @@ func buildClusterClients(label string, kubeconfig []byte, path string, includeSe
 			return ClusterClients{}, fmt.Errorf("building typed client for %s: %w", label, err)
 		}
 		cc.Typed = typedClient
+
+		var gwClient gatewayclientset.Interface
+		if kubeconfig != nil {
+			gwClient, err = certmanager.NewGatewayClientFromBytes(kubeconfig)
+		} else {
+			gwClient, err = certmanager.NewGatewayClient(path)
+		}
+		if err != nil {
+			return ClusterClients{}, fmt.Errorf("building gateway client for %s: %w", label, err)
+		}
+		cc.Gateway = gwClient
 	}
 
 	return cc, nil
@@ -118,7 +134,7 @@ func buildAllClusterClients(entries []ClusterEntry, includeSecrets bool) ([]Clus
 // requested, raw kubernetes.io/tls Secrets, returning a unified, sorted
 // list of rows. It's shared by `scan` and `dashboard` so both report the
 // same data the same way.
-func collectRows(ctx context.Context, kubeconfigs []string, warnDays int, includeSecrets bool, requireLabels []string) ([]output.Row, error) {
+func collectRows(ctx context.Context, kubeconfigs []string, warnDays int, includeSecrets bool, requireLabels []string, mtlsSecretSelectors []string) ([]output.Row, error) {
 	targets := kubeconfigs
 	if len(targets) == 0 {
 		targets = []string{""} // empty => default loading rules
@@ -139,14 +155,49 @@ func collectRows(ctx context.Context, kubeconfigs []string, warnDays int, includ
 		clients = append(clients, cc)
 	}
 
-	return CollectRowsFromClients(ctx, clients, warnDays, includeSecrets, requireLabels)
+	return CollectRowsFromClients(ctx, clients, warnDays, includeSecrets, requireLabels, mtlsSecretSelectors)
+}
+
+// mtlsRows scans Secrets matching selectors (label-selector syntax, e.g.
+// "app=my-client") via the same parsing path as a normal
+// kubernetes.io/tls Secret scan, but tags each result Source "mtls-client"
+// with a "client certificate" note in Detail — these are mTLS client
+// certificates tracked for their own expiry, not server certs backing a
+// route.
+func mtlsRows(ctx context.Context, clusterLabel string, typedClient kubernetes.Interface, selectors []string, warnDays int) []output.Row {
+	var rows []output.Row
+	for _, selector := range selectors {
+		secrets, err := certmanager.ScanSecretsWithSelector(ctx, clusterLabel, typedClient, selector)
+		if err != nil {
+			warnScan(err)
+			continue
+		}
+		for _, s := range secrets {
+			row := output.Row{
+				Source:    "mtls-client",
+				Cluster:   s.Cluster,
+				Namespace: s.Namespace,
+				Name:      s.Name,
+				NotAfter:  s.NotAfter,
+			}
+			row = classifySecret(row, s, warnDays)
+			note := "client certificate"
+			if row.Detail != "" {
+				row.Detail += " | " + note
+			} else {
+				row.Detail = note
+			}
+			rows = append(rows, row)
+		}
+	}
+	return rows
 }
 
 // CollectRowsFromClients runs the actual cert-manager/Secret scan and
 // classification logic against already-built clients, one per cluster. It's
 // the seam that lets e2e tests exercise the real scan pipeline against fake
 // clientsets instead of a real cluster.
-func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnDays int, includeSecrets bool, requireLabels []string) ([]output.Row, error) {
+func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnDays int, includeSecrets bool, requireLabels []string, mtlsSecretSelectors []string) ([]output.Row, error) {
 	var rows []output.Row
 	var allSecrets []certmanager.SecretCert
 
@@ -244,10 +295,11 @@ func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnD
 
 		if includeSecrets {
 			// Scanned before the secret rows below (rather than after, as
-			// this used to run) so referencedByIngress is available in time
-			// to flag orphaned Secrets — one whose name isn't referenced by
-			// any Certificate's spec.secretName or any Ingress route is
-			// dead weight (or a forgotten manual cert).
+			// this used to run) so referencedByIngress/referencedByGateway
+			// are available in time to flag orphaned Secrets — one whose
+			// name isn't referenced by any Certificate's spec.secretName,
+			// any Ingress route, or any Gateway API route is dead weight
+			// (or a forgotten manual cert).
 			routes, err := ingress.Scan(ctx, clusterLabel, target.Typed)
 			if err != nil {
 				warnScan(err)
@@ -256,6 +308,43 @@ func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnD
 			for _, route := range routes {
 				referencedByIngress[route.Namespace+"/"+route.SecretName] = true
 			}
+
+			gwRoutes, err := gateway.Scan(ctx, clusterLabel, target.Gateway, target.Typed)
+			if err != nil {
+				warnScan(err)
+			}
+			referencedByGateway := make(map[string]bool, len(gwRoutes))
+			for _, route := range gwRoutes {
+				if route.SecretName != "" {
+					referencedByGateway[route.SecretNamespace+"/"+route.SecretName] = true
+				}
+			}
+
+			gwStatusRows, err := gateway.ScanStatus(ctx, clusterLabel, target.Gateway, target.Typed)
+			if err != nil {
+				warnScan(err)
+			}
+			rows = append(rows, gwStatusRows...)
+
+			istioRoutes, err := mesh.ScanIstio(ctx, clusterLabel, target.Dyn, target.Typed)
+			if err != nil {
+				warnScan(err)
+			}
+			traefikRoutes, err := mesh.ScanTraefik(ctx, clusterLabel, target.Dyn, target.Typed)
+			if err != nil {
+				warnScan(err)
+			}
+			for _, r := range istioRoutes {
+				if r.SecretName != "" {
+					referencedByGateway[r.SecretNamespace+"/"+r.SecretName] = true
+				}
+			}
+			for _, r := range traefikRoutes {
+				if r.SecretName != "" {
+					referencedByGateway[r.SecretNamespace+"/"+r.SecretName] = true
+				}
+			}
+
 			referencedByCert := make(map[string]bool, len(certs))
 			for _, c := range certs {
 				if c.SecretName != "" {
@@ -273,8 +362,8 @@ func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnD
 				}
 				row = classifySecret(row, s, warnDays)
 				key := s.Namespace + "/" + s.Name
-				if !referencedByCert[key] && !referencedByIngress[key] {
-					note := "orphaned: no Certificate or Ingress references this Secret"
+				if !referencedByCert[key] && !referencedByIngress[key] && !referencedByGateway[key] {
+					note := "orphaned: no Certificate, Ingress, or Gateway route references this Secret"
 					if row.Detail != "" {
 						row.Detail += " | " + note
 					} else {
@@ -285,6 +374,12 @@ func CollectRowsFromClients(ctx context.Context, targets []ClusterClients, warnD
 			}
 
 			rows = append(rows, ingressRoutesRows(routes, secretsByKey, warnDays)...)
+			rows = append(rows, gatewayRoutesRows(gwRoutes, secretsByKey, warnDays)...)
+			rows = append(rows, meshRoutesRows(istioRoutes, traefikRoutes, secretsByKey, warnDays)...)
+
+			if len(mtlsSecretSelectors) > 0 {
+				rows = append(rows, mtlsRows(ctx, clusterLabel, target.Typed, mtlsSecretSelectors, warnDays)...)
+			}
 		}
 	}
 
@@ -517,6 +612,144 @@ func ingressRoutesRows(routes []ingress.Route, secretsByKey map[string]certmanag
 			}
 			rows = append(rows, row)
 		}
+	}
+	return rows
+}
+
+// gatewayRoutesRows cross-checks each Gateway API route's resolved TLS
+// binding against its backing Secret, the same way ingressRoutesRows does
+// for classic Ingress: a route whose Gateway wasn't Accepted, whose
+// cross-namespace Secret reference has no permitting ReferenceGrant, or
+// whose Secret is simply missing is flagged as an error; otherwise the row
+// is classified by that Secret's real expiry. A route with no resolved
+// Secret at all (e.g. attached to a plain-HTTP listener) is skipped — like
+// an Ingress with no TLS block, there's nothing to cross-check.
+func gatewayRoutesRows(routes []gateway.Route, secretsByKey map[string]certmanager.SecretCert, warnDays int) []output.Row {
+	var rows []output.Row
+	for _, route := range routes {
+		name := fmt.Sprintf("%s/%s -> Gateway/%s", route.RouteKind, route.RouteName, route.GatewayName)
+
+		switch {
+		case route.CrossNamespaceBlocked:
+			rows = append(rows, output.Row{
+				Source:    "gateway",
+				Cluster:   route.Cluster,
+				Namespace: route.Namespace,
+				Name:      name,
+				Status:    "error",
+				Detail:    fmt.Sprintf("Gateway %s/%s's TLS certificateRef crosses namespaces with no permitting ReferenceGrant", route.GatewayNamespace, route.GatewayName),
+			})
+			continue
+		case !route.Accepted:
+			rows = append(rows, output.Row{
+				Source:    "gateway",
+				Cluster:   route.Cluster,
+				Namespace: route.Namespace,
+				Name:      name,
+				Status:    "error",
+				Detail:    fmt.Sprintf("Gateway %s/%s has not accepted this route (Accepted condition not True)", route.GatewayNamespace, route.GatewayName),
+			})
+			continue
+		case route.SecretName == "":
+			// No TLS listener resolved for this route — nothing to
+			// cross-check, mirroring an Ingress with no TLS block.
+			continue
+		}
+
+		key := route.SecretNamespace + "/" + route.SecretName
+		secret, ok := secretsByKey[key]
+
+		hosts := route.Hosts
+		if len(hosts) == 0 {
+			hosts = []string{""}
+		}
+		for _, host := range hosts {
+			rowName := name
+			if host != "" {
+				rowName = fmt.Sprintf("%s (%s)", name, host)
+			}
+			row := output.Row{
+				Source:    "gateway",
+				Cluster:   route.Cluster,
+				Namespace: route.Namespace,
+				Name:      rowName,
+			}
+			switch {
+			case !ok:
+				row.Status = "error"
+				row.Detail = fmt.Sprintf("Secret %s not found", key)
+			case host != "" && !ingress.AnyHostCovered(secret.DNSNames, host):
+				row.NotAfter = secret.NotAfter
+				row.Status = "error"
+				row.Detail = fmt.Sprintf("host %s not covered by Secret %s's certificate SANs %v", host, key, secret.DNSNames)
+			default:
+				row.NotAfter = secret.NotAfter
+				row = classifySecret(row, secret, warnDays)
+			}
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+// meshRoutesRows cross-checks every Istio Gateway and Traefik IngressRoute
+// TLS binding against its backing Secret, the same way ingressRoutesRows
+// and gatewayRoutesRows do — a missing Secret or a host not covered by that
+// Secret's SANs is an error; otherwise the row is classified by the
+// Secret's real expiry.
+func meshRoutesRows(istioRoutes []mesh.IstioRoute, traefikRoutes []mesh.TraefikRoute, secretsByKey map[string]certmanager.SecretCert, warnDays int) []output.Row {
+	var rows []output.Row
+
+	for _, route := range istioRoutes {
+		rows = append(rows, meshRouteRows("istio", route.Cluster, route.Namespace, "Gateway/"+route.GatewayName, route.SecretNamespace, route.SecretName, route.Hosts, secretsByKey, warnDays)...)
+	}
+	for _, route := range traefikRoutes {
+		rows = append(rows, meshRouteRows("traefik", route.Cluster, route.Namespace, "IngressRoute/"+route.IngressRoute, route.SecretNamespace, route.SecretName, route.Hosts, secretsByKey, warnDays)...)
+	}
+	return rows
+}
+
+// meshRouteRows is the shared per-route-per-host row builder behind
+// meshRoutesRows, parameterized on the mesh source ("istio" | "traefik")
+// since Istio Gateways and Traefik IngressRoutes otherwise resolve to the
+// exact same shape: a namespace, a display name, a backing Secret, and the
+// hosts it covers.
+func meshRouteRows(source, cluster, namespace, displayName, secretNamespace, secretName string, hosts []string, secretsByKey map[string]certmanager.SecretCert, warnDays int) []output.Row {
+	if secretName == "" {
+		return nil
+	}
+	key := secretNamespace + "/" + secretName
+	secret, ok := secretsByKey[key]
+
+	if len(hosts) == 0 {
+		hosts = []string{""}
+	}
+
+	var rows []output.Row
+	for _, host := range hosts {
+		name := displayName
+		if host != "" {
+			name = fmt.Sprintf("%s (%s)", displayName, host)
+		}
+		row := output.Row{
+			Source:    source,
+			Cluster:   cluster,
+			Namespace: namespace,
+			Name:      name,
+		}
+		switch {
+		case !ok:
+			row.Status = "error"
+			row.Detail = fmt.Sprintf("Secret %s not found", key)
+		case host != "" && !ingress.AnyHostCovered(secret.DNSNames, host):
+			row.NotAfter = secret.NotAfter
+			row.Status = "error"
+			row.Detail = fmt.Sprintf("host %s not covered by Secret %s's certificate SANs %v", host, key, secret.DNSNames)
+		default:
+			row.NotAfter = secret.NotAfter
+			row = classifySecret(row, secret, warnDays)
+		}
+		rows = append(rows, row)
 	}
 	return rows
 }

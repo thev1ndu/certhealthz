@@ -74,6 +74,31 @@ func ScanSecrets(ctx context.Context, cluster string, client kubernetes.Interfac
 	return out, nil
 }
 
+// ScanSecretsWithSelector is ScanSecrets narrowed to Secrets matching a
+// label selector (Kubernetes selector syntax, e.g. "app=my-client"), for
+// tracking mTLS client certificates specifically — those are ordinary
+// kubernetes.io/tls Secrets, distinguished only by the operator's own
+// labeling convention, so this reuses the exact same parsing path as
+// ScanSecrets rather than duplicating it.
+func ScanSecretsWithSelector(ctx context.Context, cluster string, client kubernetes.Interface, labelSelector string) ([]SecretCert, error) {
+	list, err := client.CoreV1().Secrets("").List(ctx, metav1.ListOptions{
+		FieldSelector: "type=kubernetes.io/tls",
+		LabelSelector: labelSelector,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("listing tls secrets matching %q on %s: %w", labelSelector, cluster, err)
+	}
+
+	out := make([]SecretCert, 0, len(list.Items))
+	for _, s := range list.Items {
+		sc, ok := parseSecret(cluster, s)
+		if ok {
+			out = append(out, sc)
+		}
+	}
+	return out, nil
+}
+
 func parseSecret(cluster string, s corev1.Secret) (SecretCert, bool) {
 	leaf, chain, err := ParseSecretChain(s)
 	if err != nil {

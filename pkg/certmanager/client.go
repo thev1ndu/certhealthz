@@ -6,6 +6,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
+	gatewayclientset "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned"
 )
 
 func metaListOpts() metav1.ListOptions {
@@ -31,6 +33,28 @@ func NewTypedClient(kubeconfigPath string) (kubernetes.Interface, error) {
 		return nil, err
 	}
 	return kubernetes.NewForConfig(cfg)
+}
+
+// NewGatewayClient builds a Gateway API generated clientset from a
+// kubeconfig path, the same way NewTypedClient builds a standard
+// client-go clientset. Passing an empty path falls back to the default
+// loading rules.
+func NewGatewayClient(kubeconfigPath string) (gatewayclientset.Interface, error) {
+	cfg, err := restConfig(kubeconfigPath)
+	if err != nil {
+		return nil, err
+	}
+	return gatewayclientset.NewForConfig(cfg)
+}
+
+// NewGatewayClientFromBytes is the in-memory-kubeconfig counterpart to
+// NewGatewayClient.
+func NewGatewayClientFromBytes(kubeconfig []byte) (gatewayclientset.Interface, error) {
+	cfg, err := restConfigFromBytes(kubeconfig)
+	if err != nil {
+		return nil, err
+	}
+	return gatewayclientset.NewForConfig(cfg)
 }
 
 func restConfig(kubeconfigPath string) (*rest.Config, error) {

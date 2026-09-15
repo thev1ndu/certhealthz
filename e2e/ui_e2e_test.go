@@ -61,7 +61,7 @@ func TestUICertsEndToEnd(t *testing.T) {
 	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
 
 	collect := func(ctx context.Context) ([]output.Row, error) {
-		return cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil)
+		return cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil, nil)
 	}
 
 	uiHandler, err := ui.Handler()
@@ -280,7 +280,7 @@ func TestUISettingsEndToEnd(t *testing.T) {
 	settings := cmd.NewSettings(5, true, "") // warnDays=5: 10 days out is not yet "expiring"
 	collect := func(ctx context.Context) ([]output.Row, error) {
 		warnDays, includeSecrets, _ := settings.Get()
-		return cmd.CollectRowsFromClients(ctx, targets, warnDays, includeSecrets, nil)
+		return cmd.CollectRowsFromClients(ctx, targets, warnDays, includeSecrets, nil, nil)
 	}
 
 	uiHandler, err := ui.Handler()
@@ -357,7 +357,7 @@ func TestUIAlertEndToEnd(t *testing.T) {
 	typed := newFakeTypedClient(newTLSSecret("expired-tls", expiredCert))
 	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
 	collect := func(ctx context.Context) ([]output.Row, error) {
-		return cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil)
+		return cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil, nil)
 	}
 
 	var received int
@@ -432,7 +432,7 @@ func TestUIHistoryEndToEnd(t *testing.T) {
 	typed := newFakeTypedClient(newTLSSecret("tracked-tls", firstCert))
 	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
 	collect := func(ctx context.Context) ([]output.Row, error) {
-		return cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil)
+		return cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil, nil)
 	}
 
 	uiHandler, err := ui.Handler()
@@ -515,7 +515,7 @@ func TestUIHistoryEventsEndToEnd(t *testing.T) {
 	typed := newFakeTypedClient(newTLSSecret("a-tls", certA))
 	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
 	collect := func(ctx context.Context) ([]output.Row, error) {
-		return cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil)
+		return cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil, nil)
 	}
 
 	uiHandler, err := ui.Handler()

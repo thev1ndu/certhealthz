@@ -124,6 +124,10 @@ certhealthz ct example.com --kubeconfig ~/.kube/prod --since 24h
 | `--ct-domains`      | `ui`                 | repeatable, domain to periodically check CT logs for on `--ct-interval`; unset disables CT monitoring          |
 | `--ct-interval`     | `ui`                 | how often to check `--ct-domains` against CT logs (default `6h`)                                               |
 | `--require-label`   | `scan`, `ui`         | repeatable, label key every cert-manager Certificate must carry (value not checked); unset disables the check  |
+| `--aws-region`      | `scan`, `ui`         | repeatable, AWS region to scan Certificate Manager (ACM) in via the default AWS credential chain; unset disables AWS scanning |
+| `--gcp-project`     | `scan`, `ui`         | GCP project to scan Certificate Manager in via Application Default Credentials; unset disables GCP scanning   |
+| `--azure-vault-url` | `scan`, `ui`         | repeatable, Azure Key Vault URL to scan for certificates via `azidentity`'s default credential chain; unset disables Azure scanning |
+| `--mtls-secret-selector` | `scan`, `ui`     | repeatable label selector matching `kubernetes.io/tls` Secrets that hold mTLS client certificates, tracked separately from server certs |
 
 ## Status
 
@@ -215,14 +219,41 @@ MVP.
 - [x] naming/label convention drift: `--require-label` (repeatable, `scan`/`ui`) flags any
       cert-manager Certificate missing an operator-required label key, for compliance-review
       teams enforcing an ownership/environment tagging policy.
+- [x] Gateway API cross-reference: `HTTPRoute`/`GRPCRoute`/`TLSRoute` are resolved through their
+      parent `Gateway`'s listener `tls.certificateRefs` (honoring cross-namespace `ReferenceGrant`)
+      the same way an Ingress TLS block is checked against its Secret — a route attached to an
+      unaccepted Gateway, a missing Secret, or a host not covered by the Secret's SANs is flagged
+      `error`. `GatewayClass`/`Gateway` `Accepted`/`Programmed` conditions are surfaced as
+      `gateway-status` rows, with the failing `GatewayClass`'s controller identified by name (Envoy
+      Gateway, NGINX Gateway Fabric, Contour, Istio, Kong, Traefik, GKE Gateway, AWS Gateway API
+      Controller, Linkerd). Fails soft (empty result, no error) on a cluster without the Gateway API
+      CRDs installed. Orphaned-Secret detection now also counts Gateway-referenced Secrets.
+- [x] Ingress → Gateway API migration tooling: a new **Routes** tab (and `/api/routes`,
+      `/api/routes/coverage`) cross-references every Ingress and Gateway API route by hostname,
+      classifying each host `ingress-only` / `dual-running` / `gateway-only`; a `dual-running` host
+      whose Ingress and Gateway sides reference different Secrets is flagged for drift, and a
+      "cutover gate" check confirms the Gateway side's `Accepted`+`Programmed` conditions (and,
+      where a live address is published, an actual TLS probe against it) before calling a
+      `gateway-only`/`dual-running` host ready to cut over. A `gateway-only` host that still has a
+      matching Ingress rule host is flagged as a stale Ingress left behind after cutover — detection
+      only, nothing is ever deleted.
+- [x] service mesh / other ingress-controller TLS scanning: Istio `Gateway` (`tls.credentialName`,
+      including the `kubernetes-gateway://` cross-namespace form) and Traefik `IngressRoute`
+      (`spec.tls.secretName` plus hostnames parsed out of `Host()`/`HostSNI()` match rules) are
+      cross-checked against their backing Secrets the same way Ingress/Gateway API are. Both are
+      discovery-gated: a cluster without the Istio or Traefik CRDs installed scans as empty, not an
+      error — most clusters run neither.
+- [x] cloud-managed cert scanning: `--aws-region` (AWS Certificate Manager, default AWS credential
+      chain), `--gcp-project` (GCP Certificate Manager, Application Default Credentials), and
+      `--azure-vault-url` (Azure Key Vault, `azidentity`'s default credential chain) each add rows
+      (`aws-acm` / `gcp-certmanager` / `azure-keyvault`) to the same unified report — no cloud
+      credentials are ever loaded unless the corresponding flag is set.
+- [x] mTLS client-certificate expiry tracking: `--mtls-secret-selector` (repeatable label selector)
+      scans matching `kubernetes.io/tls` Secrets through the same parsing path as a normal Secret
+      scan, tagged `mtls-client` with a "client certificate" note, so client certs are tracked
+      without being mistaken for server certs backing a route.
 
 ### Planned
-
-**Detection coverage**
-
-- [ ] Gateway API cross-reference: extend the Ingress check above to `HTTPRoute`/`Gateway` (`gateway.networking.k8s.io`)
-- [ ] cloud-managed cert scanning: AWS ACM, GCP Certificate Manager, Azure Key Vault — one report across k8s and cloud
-- [ ] mTLS client-certificate expiry tracking, not just server certs
 
 **Trust & chain validation**
 

@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/thev1ndu/certhealthz/pkg/certmanager"
+	"github.com/thev1ndu/certhealthz/pkg/gateway"
 	"github.com/thev1ndu/certhealthz/pkg/ingress"
 	"github.com/thev1ndu/certhealthz/pkg/probe"
 )
@@ -80,20 +81,44 @@ type apiCertDetail struct {
 	BackedRoutes []apiBackedRoute `json:"backedRoutes,omitempty"`
 }
 
-// apiBackedRoute is one Ingress route (and its hosts) that a certificate's
-// Secret backs, in the certificate detail response's BackedRoutes.
+// apiBackedRoute is one route (Ingress or Gateway API) — and its hosts —
+// that a certificate's Secret backs, in the certificate detail response's
+// BackedRoutes. Kind distinguishes an Ingress-backed entry from a
+// Gateway-API-backed one (HTTPRoute/GRPCRoute/TLSRoute); Ingress carries the
+// route's display name for both (kept under its original JSON key for
+// backward compatibility with the dashboard's existing renderer).
 type apiBackedRoute struct {
+	Kind    string   `json:"kind"`
 	Ingress string   `json:"ingress"`
 	Hosts   []string `json:"hosts"`
 }
 
-// backedRoutes filters routes down to the ones a given namespace+Secret
-// actually back, for the certificate detail page's blast-radius view.
+// backedRoutes filters Ingress routes down to the ones a given
+// namespace+Secret actually back, for the certificate detail page's
+// blast-radius view.
 func backedRoutes(routes []ingress.Route, namespace, secretName string) []apiBackedRoute {
 	var out []apiBackedRoute
 	for _, route := range routes {
 		if route.Namespace == namespace && route.SecretName == secretName {
-			out = append(out, apiBackedRoute{Ingress: route.Ingress, Hosts: route.Hosts})
+			out = append(out, apiBackedRoute{Kind: "ingress", Ingress: route.Ingress, Hosts: route.Hosts})
+		}
+	}
+	return out
+}
+
+// backedGatewayRoutes filters Gateway API routes down to the ones a given
+// Secret (identified by its own namespace+name, since a Gateway API route's
+// Secret can live in a different namespace than the route itself) actually
+// back.
+func backedGatewayRoutes(routes []gateway.Route, secretNamespace, secretName string) []apiBackedRoute {
+	var out []apiBackedRoute
+	for _, route := range routes {
+		if route.SecretNamespace == secretNamespace && route.SecretName == secretName {
+			out = append(out, apiBackedRoute{
+				Kind:    strings.ToLower(route.RouteKind),
+				Ingress: fmt.Sprintf("%s/%s -> Gateway/%s", route.RouteKind, route.RouteName, route.GatewayName),
+				Hosts:   route.Hosts,
+			})
 		}
 	}
 	return out
@@ -234,6 +259,25 @@ func parseIngressRowName(name string) (ingressName, host string) {
 	return name, ""
 }
 
+// parseGatewayRowName reverses gatewayRoutesRows' composite row name
+// ("<kind>/<route> -> Gateway/<gateway>" or the same with a trailing
+// " (<host>)") back into its route kind and name, so handleCertDetail can
+// re-find the originating Route.
+func parseGatewayRowName(name string) (routeKind, routeName string) {
+	if i := strings.Index(name, " ("); i != -1 && strings.HasSuffix(name, ")") {
+		name = name[:i]
+	}
+	base, _, found := strings.Cut(name, " -> ")
+	if !found {
+		return "", name
+	}
+	kind, rest, found := strings.Cut(base, "/")
+	if !found {
+		return "", rest
+	}
+	return kind, rest
+}
+
 // findClusterClients builds clients for every configured cluster and
 // returns the one whose real (possibly kubeconfig-renamed) label matches.
 func findClusterClients(entries []ClusterEntry, cluster string, includeSecrets bool) (ClusterClients, error) {
@@ -297,6 +341,9 @@ func handleCertDetail(deps UIDeps, w http.ResponseWriter, r *http.Request) {
 		if routes, err := ingress.Scan(ctx, cc.Label, cc.Typed); err == nil {
 			detail.BackedRoutes = backedRoutes(routes, id.Namespace, id.Name)
 		}
+		if gwRoutes, err := gateway.Scan(ctx, cc.Label, cc.Gateway, cc.Typed); err == nil {
+			detail.BackedRoutes = append(detail.BackedRoutes, backedGatewayRoutes(gwRoutes, id.Namespace, id.Name)...)
+		}
 
 	case "cert-manager":
 		cc, err := deps.ClusterClientsFor(id.Cluster)
@@ -336,6 +383,9 @@ func handleCertDetail(deps UIDeps, w http.ResponseWriter, r *http.Request) {
 		if routes, err := ingress.Scan(ctx, cc.Label, cc.Typed); err == nil {
 			detail.BackedRoutes = backedRoutes(routes, id.Namespace, secretName)
 		}
+		if gwRoutes, err := gateway.Scan(ctx, cc.Label, cc.Gateway, cc.Typed); err == nil {
+			detail.BackedRoutes = append(detail.BackedRoutes, backedGatewayRoutes(gwRoutes, id.Namespace, secretName)...)
+		}
 
 	case "ingress":
 		cc, err := deps.ClusterClientsFor(id.Cluster)
@@ -363,6 +413,43 @@ func handleCertDetail(deps UIDeps, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		secret, err := cc.Typed.CoreV1().Secrets(id.Namespace).Get(ctx, secretName, metav1.GetOptions{})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		leaf, chain, err := certmanager.ParseSecretChain(*secret)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		detail = certToDetail(id, leaf, chain)
+
+	case "gateway":
+		cc, err := deps.ClusterClientsFor(id.Cluster)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		routes, err := gateway.Scan(ctx, cc.Label, cc.Gateway, cc.Typed)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		routeKind, routeName := parseGatewayRowName(id.Name)
+		var secretNamespace, secretName string
+		found := false
+		for _, route := range routes {
+			if route.Namespace == id.Namespace && route.RouteKind == routeKind && route.RouteName == routeName && route.SecretName != "" {
+				secretNamespace, secretName = route.SecretNamespace, route.SecretName
+				found = true
+				break
+			}
+		}
+		if !found || secretName == "" {
+			http.Error(w, "gateway route not found", http.StatusNotFound)
+			return
+		}
+		secret, err := cc.Typed.CoreV1().Secrets(secretNamespace).Get(ctx, secretName, metav1.GetOptions{})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return

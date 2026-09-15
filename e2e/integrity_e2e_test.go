@@ -74,7 +74,7 @@ func TestPrivateKeyReuseEndToEnd(t *testing.T) {
 	typed := newFakeTypedClient(secretA, secretB)
 	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
 
-	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil)
+	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil, nil)
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestDNSNameConflictEndToEnd(t *testing.T) {
 	typed := newFakeTypedClient(secretA, secretB)
 	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
 
-	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil)
+	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil, nil)
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestChainCertExpiryEndToEnd(t *testing.T) {
 	typed := newFakeTypedClient(secret)
 	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
 
-	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil)
+	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil, nil)
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestOrphanedSecretEndToEnd(t *testing.T) {
 	)
 	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
 
-	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil)
+	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil, nil)
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestOrphanedSecretEndToEnd(t *testing.T) {
 	if !ok {
 		t.Fatal("expected a secret row for orphan-tls")
 	}
-	if !strings.Contains(detail, "orphaned: no Certificate or Ingress references this Secret") {
+	if !strings.Contains(detail, "orphaned: no Certificate, Ingress, or Gateway route references this Secret") {
 		t.Errorf("expected orphan-tls to be flagged orphaned, got %q", detail)
 	}
 }
@@ -295,7 +295,7 @@ func TestRequiredLabelEndToEnd(t *testing.T) {
 	)
 	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
 
-	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, []string{"team", "environment"})
+	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, []string{"team", "environment"}, nil)
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestCertificateRequestFailureEndToEnd(t *testing.T) {
 	typed := newFakeTypedClient(newTLSSecret("failing-cert-tls", cert))
 	targets := []cmd.ClusterClients{{Label: "test-cluster", Dyn: dyn, Typed: typed}}
 
-	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil)
+	rows, err := cmd.CollectRowsFromClients(ctx, targets, warnDays, true, nil, nil)
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}

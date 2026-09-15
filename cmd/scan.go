@@ -7,18 +7,23 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/thev1ndu/certhealthz/pkg/alert"
+	"github.com/thev1ndu/certhealthz/pkg/cloudcert"
 	"github.com/thev1ndu/certhealthz/pkg/history"
 	"github.com/thev1ndu/certhealthz/pkg/output"
 )
 
 var (
-	scanWarnDays      int
-	scanWebhookURL    string
-	scanPrometheus    bool
-	scanIncludeRaw    bool
-	scanRecord        bool
-	scanDBPath        string
-	scanRequireLabels []string
+	scanWarnDays           int
+	scanWebhookURL         string
+	scanPrometheus         bool
+	scanIncludeRaw         bool
+	scanRecord             bool
+	scanDBPath             string
+	scanRequireLabels      []string
+	scanAWSRegions         []string
+	scanGCPProject         string
+	scanAzureVaultURLs     []string
+	scanMTLSSecretSelector []string
 )
 
 var scanCmd = &cobra.Command{
@@ -35,16 +40,46 @@ func init() {
 	scanCmd.Flags().BoolVar(&scanRecord, "record", false, "persist this scan to the history database for trend diffing (see: certhealthz history diff)")
 	scanCmd.Flags().StringVar(&scanDBPath, "db", defaultDBPath(), "path to the SQLite database used by --record and history diff")
 	scanCmd.Flags().StringSliceVar(&scanRequireLabels, "require-label", nil, "label key every cert-manager Certificate must carry (value not checked); repeat flag for multiple. Unset disables the check")
+	scanCmd.Flags().StringSliceVar(&scanAWSRegions, "aws-region", nil, "AWS region to scan Certificate Manager (ACM) in, using the default AWS credential chain; repeat flag for multiple. Unset disables AWS scanning entirely")
+	scanCmd.Flags().StringVar(&scanGCPProject, "gcp-project", "", "GCP project to scan Certificate Manager in, using Application Default Credentials. Unset disables GCP scanning entirely")
+	scanCmd.Flags().StringSliceVar(&scanAzureVaultURLs, "azure-vault-url", nil, "Azure Key Vault URL to scan for certificates, using azidentity's default credential chain; repeat flag for multiple. Unset disables Azure scanning entirely")
+	scanCmd.Flags().StringSliceVar(&scanMTLSSecretSelector, "mtls-secret-selector", nil, "label selector (e.g. app=my-client) matching kubernetes.io/tls Secrets that hold mTLS client certificates, tracked separately from server certs; repeat flag for multiple. Unset disables mTLS tracking")
 	rootCmd.AddCommand(scanCmd)
 }
 
 func runScan(_ *cobra.Command, _ []string) error {
 	ctx := context.Background()
 
-	rows, err := collectRows(ctx, kubeconfigPaths, scanWarnDays, scanIncludeRaw, scanRequireLabels)
+	rows, err := collectRows(ctx, kubeconfigPaths, scanWarnDays, scanIncludeRaw, scanRequireLabels, scanMTLSSecretSelector)
 	if err != nil {
 		return err
 	}
+
+	for _, region := range scanAWSRegions {
+		awsRows, err := cloudcert.ScanACM(ctx, region, scanWarnDays)
+		if err != nil {
+			warnScan(err)
+			continue
+		}
+		rows = append(rows, awsRows...)
+	}
+	if scanGCPProject != "" {
+		gcpRows, err := cloudcert.ScanGCP(ctx, scanGCPProject, scanWarnDays)
+		if err != nil {
+			warnScan(err)
+		} else {
+			rows = append(rows, gcpRows...)
+		}
+	}
+	for _, vaultURL := range scanAzureVaultURLs {
+		azureRows, err := cloudcert.ScanAzureKeyVault(ctx, vaultURL, scanWarnDays)
+		if err != nil {
+			warnScan(err)
+			continue
+		}
+		rows = append(rows, azureRows...)
+	}
+	output.Sort(rows)
 
 	if scanPrometheus {
 		output.Prometheus(os.Stdout, rows)
