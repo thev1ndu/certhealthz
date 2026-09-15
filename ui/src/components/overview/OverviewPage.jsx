@@ -1,8 +1,8 @@
 import { useMemo } from "react";
 import {
   ArrowRightIcon,
-  CertificateIcon,
   ClockCounterClockwiseIcon,
+  HardDrivesIcon,
   ShieldCheckIcon,
 } from "@phosphor-icons/react";
 import StatusBadge from "@/components/StatusBadge";
@@ -109,7 +109,9 @@ export default function OverviewPage({ certs, isLive, onNavigate }) {
                   <button
                     key={row.id}
                     type="button"
-                    onClick={() => onNavigate("certificates", row.id)}
+                    onClick={() =>
+                      onNavigate(row.source === "endpoint" ? "endpoints" : "certificates", row.id)
+                    }
                     className="flex w-full items-center justify-between gap-3 border-t border-border/60 px-4 py-2.5 text-left first:border-t-0 hover:bg-accent/40"
                   >
                     <div className="min-w-0">
@@ -136,7 +138,7 @@ export default function OverviewPage({ certs, isLive, onNavigate }) {
                 onClick={() => onNavigate("certificates")}
                 className="mt-3 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
               >
-                View all certificates
+                View all clusters
                 <ArrowRightIcon size={12} />
               </button>
             )}
@@ -144,9 +146,9 @@ export default function OverviewPage({ certs, isLive, onNavigate }) {
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <NavCard
-              icon={CertificateIcon}
-              title="Certificates"
-              description="Browse every scanned certificate"
+              icon={HardDrivesIcon}
+              title="Clusters"
+              description="Browse certificates across every connected cluster"
               onClick={() => onNavigate("certificates")}
             />
             <NavCard

@@ -1,8 +1,8 @@
 import {
-  CertificateIcon,
   ClockCounterClockwiseIcon,
   GearSixIcon,
   GlobeIcon,
+  HardDrivesIcon,
   HouseIcon,
   ShieldCheckIcon,
   SignpostIcon,
@@ -20,7 +20,7 @@ import {
 
 export const TABS = [
   { id: "overview", label: "Overview", icon: HouseIcon, index: "00" },
-  { id: "certificates", label: "Certificates", icon: CertificateIcon, index: "01" },
+  { id: "certificates", label: "Clusters", icon: HardDrivesIcon, index: "01" },
   { id: "endpoints", label: "Endpoints", icon: GlobeIcon, index: "02" },
   { id: "routes", label: "Routes", icon: SignpostIcon, index: "03" },
   { id: "history", label: "History", icon: ClockCounterClockwiseIcon, index: "04" },

@@ -275,6 +275,11 @@ MVP.
       scans matching `kubernetes.io/tls` Secrets through the same parsing path as a normal Secret
       scan, tagged `mtls-client` with a "client certificate" note, so client certs are tracked
       without being mistaken for server certs backing a route.
+- [x] dashboard: Certificates tab split into a **Clusters** tab (cert-manager/Secret/Ingress/Gateway
+      rows only, no live endpoints, no "Add endpoint") and a dedicated **Endpoints** tab (live TLS
+      probes only), each with its own source-scoped "Manage sources" dialog (Clusters manages
+      clusters only, Endpoints manages endpoints only); **Settings** gained a combined "Manage
+      sources" section that can add/remove both, so there's still one place to do everything.
 - [x] on-demand synthetic route test: a **Test** button on any Routes-tab row (and on a Migration
       coverage row, to re-verify a `cutoverReady` claim) runs a live TCP connect → TLS handshake
       (SNI forced to the route's own host) → certificate comparison against the scan's own backing

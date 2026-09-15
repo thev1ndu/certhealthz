@@ -1,3 +1,6 @@
+import AddClusterPopover from "@/components/certificates/AddClusterPopover";
+import AddEndpointPopover from "@/components/certificates/AddEndpointPopover";
+import SourcesDialog from "@/components/certificates/SourcesDialog";
 import NotConnected from "@/components/layout/NotConnected";
 import PageHeading from "@/components/layout/PageHeading";
 import Section from "@/components/layout/Section";
@@ -6,11 +9,15 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useAddCluster } from "@/hooks/useAddCluster";
+import { useAddEndpoint } from "@/hooks/useAddEndpoint";
 import { useSettings } from "@/hooks/useSettings";
 
 export default function SettingsPage({ isLive, onSaved }) {
   const { form, error, busy, alertResult, alertBusy, updateField, submit, testAlert } =
     useSettings(isLive, onSaved);
+  const addCluster = useAddCluster(onSaved);
+  const addEndpoint = useAddEndpoint(onSaved);
 
   return (
     <div>
@@ -23,6 +30,17 @@ export default function SettingsPage({ isLive, onSaved }) {
         <NotConnected />
       ) : (
         <div className="flex max-w-lg flex-col gap-4">
+          <Section title="Sources">
+            <p className="mb-4 text-sm text-muted-foreground">
+              Manage every cluster and live endpoint this scan covers.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <SourcesDialog isLive={isLive} onChanged={onSaved} scope="both" />
+              <AddClusterPopover isLive={isLive} addCluster={addCluster} />
+              <AddEndpointPopover isLive={isLive} addEndpoint={addEndpoint} />
+            </div>
+          </Section>
+
           <Section title="Scan settings">
             <FieldGroup>
               <Field>

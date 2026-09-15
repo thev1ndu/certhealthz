@@ -6,7 +6,7 @@ export default function PageHeading({ title, description }) {
       </div>
       <h1 className="font-heading text-2xl font-medium tracking-tight">{title}</h1>
       {description && (
-        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{description}</p>
+        <p className="mt-1 text-sm text-muted-foreground">{description}</p>
       )}
     </div>
   );

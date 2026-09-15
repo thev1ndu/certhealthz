@@ -90,7 +90,7 @@ export default function EndpointsToolbar({
       </Button>
 
       <div className="ml-auto flex items-center gap-2">
-        <SourcesDialog isLive={isLive} onChanged={onSourcesChanged} />
+        <SourcesDialog isLive={isLive} onChanged={onSourcesChanged} scope="endpoints" />
         <AddEndpointPopover isLive={isLive} addEndpoint={addEndpoint} />
         <ColumnVisibilityMenu visible={visibleColumns} onToggle={onToggleColumn} />
       </div>
