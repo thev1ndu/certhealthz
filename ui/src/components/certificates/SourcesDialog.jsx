@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CertificateIcon, PlugsConnectedIcon, StackIcon, TrashIcon } from "@phosphor-icons/react";
+import { HardDrivesIcon, PlugsConnectedIcon, StackIcon, TrashIcon } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -42,9 +42,24 @@ function SourceRow({ name, removable, removeLabel, busy, onRemove }) {
   );
 }
 
-export default function SourcesDialog({ isLive, onChanged }) {
+const SCOPE_COPY = {
+  both: {
+    title: "Manage sources",
+    description: "Every cluster and endpoint this scan covers. Only ones added through the UI can be removed here.",
+  },
+  clusters: {
+    title: "Manage clusters",
+    description: "Every cluster this scan covers. Only ones added through the UI can be removed here.",
+  },
+  endpoints: {
+    title: "Manage endpoints",
+    description: "Every live TLS endpoint this scan probes. Only ones added through the UI can be removed here.",
+  },
+};
+
+export default function SourcesDialog({ isLive, onChanged, scope = "both" }) {
   const [open, setOpen] = useState(false);
-  const [view, setView] = useState("clusters");
+  const [view, setView] = useState(scope === "endpoints" ? "endpoints" : "clusters");
   const { clusters, endpoints, error, removingKey, removeCluster, removeEndpoint } = useSources(
     isLive,
     open,
@@ -53,46 +68,48 @@ export default function SourcesDialog({ isLive, onChanged }) {
 
   if (!isLive) return null;
 
+  const copy = SCOPE_COPY[scope] ?? SCOPE_COPY.both;
+  const effectiveView = scope === "both" ? view : scope;
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger
         render={
           <Button variant="outline">
             <StackIcon data-icon="inline-start" />
-            Manage sources
+            {copy.title}
           </Button>
         }
       />
       <DialogContent className="corner-ticks rounded-none sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Manage sources</DialogTitle>
-          <DialogDescription>
-            Every cluster and endpoint this scan covers. Only ones added through the UI can be
-            removed here.
-          </DialogDescription>
+          <DialogTitle>{copy.title}</DialogTitle>
+          <DialogDescription>{copy.description}</DialogDescription>
         </DialogHeader>
 
-        <ToggleGroup
-          value={[view]}
-          onValueChange={(v) => v[0] && setView(v[0])}
-          variant="outline"
-          spacing={0}
-          className="w-full"
-        >
-          <ToggleGroupItem value="clusters" className="flex-1">
-            <CertificateIcon data-icon="inline-start" />
-            Clusters
-          </ToggleGroupItem>
-          <ToggleGroupItem value="endpoints" className="flex-1">
-            <PlugsConnectedIcon data-icon="inline-start" />
-            Endpoints
-          </ToggleGroupItem>
-        </ToggleGroup>
+        {scope === "both" && (
+          <ToggleGroup
+            value={[view]}
+            onValueChange={(v) => v[0] && setView(v[0])}
+            variant="outline"
+            spacing={0}
+            className="w-full"
+          >
+            <ToggleGroupItem value="clusters" className="flex-1">
+              <HardDrivesIcon data-icon="inline-start" />
+              Clusters
+            </ToggleGroupItem>
+            <ToggleGroupItem value="endpoints" className="flex-1">
+              <PlugsConnectedIcon data-icon="inline-start" />
+              Endpoints
+            </ToggleGroupItem>
+          </ToggleGroup>
+        )}
 
         {error && <p className="text-sm text-destructive">{error}</p>}
 
         <div className="max-h-72 overflow-y-auto">
-          {view === "clusters" &&
+          {effectiveView === "clusters" &&
             (clusters.length === 0 ? (
               <p className="py-4 text-center text-sm text-muted-foreground">
                 No clusters configured.
@@ -110,7 +127,7 @@ export default function SourcesDialog({ isLive, onChanged }) {
               ))
             ))}
 
-          {view === "endpoints" &&
+          {effectiveView === "endpoints" &&
             (endpoints.length === 0 ? (
               <p className="py-4 text-center text-sm text-muted-foreground">
                 No endpoints configured.

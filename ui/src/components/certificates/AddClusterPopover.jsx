@@ -46,9 +46,8 @@ export default function AddClusterPopover({ isLive, addCluster }) {
         <div className="mb-1 flex items-start justify-between gap-4">
           <PopoverTitle>Add cluster</PopoverTitle>
           <Button
-            variant="outline"
+            variant="ghost"
             size="icon-sm"
-            className="rounded-none"
             aria-label="Close"
             onClick={() => openChange(false)}
           >

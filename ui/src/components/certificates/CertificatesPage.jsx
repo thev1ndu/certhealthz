@@ -7,7 +7,6 @@ import NotConnected from "@/components/layout/NotConnected";
 import PageHeading from "@/components/layout/PageHeading";
 import Section from "@/components/layout/Section";
 import { useAddCluster } from "@/hooks/useAddCluster";
-import { useAddEndpoint } from "@/hooks/useAddEndpoint";
 import { useKnownClusters } from "@/hooks/useKnownClusters";
 import { summarizeStatuses } from "@/lib/statuses";
 
@@ -53,21 +52,23 @@ export default function CertificatesPage({ certs, isLive, reloadCerts, initialCe
   const [selectedCertId, setSelectedCertId] = useState(initialCertId);
   const { visible: visibleColumns, toggle: toggleColumn } = useVisibleColumns();
 
-  const { clusters, reload: reloadClusters } = useKnownClusters(certs, isLive);
+  const clusterCerts = useMemo(() => certs.filter((r) => r.source !== "endpoint"), [certs]);
+
+  const { clusters, reload: reloadClusters } = useKnownClusters(clusterCerts, isLive);
 
   function refreshAfterAdd() {
     return Promise.all([reloadCerts(), reloadClusters()]);
   }
 
   const addCluster = useAddCluster(refreshAfterAdd);
-  const addEndpoint = useAddEndpoint(reloadCerts);
 
   const rows = useMemo(
-    () => certs.filter((r) => matchesSearch(r, query) && matchesFilters(r, statusFilter, clusterFilter)),
-    [certs, query, statusFilter, clusterFilter],
+    () =>
+      clusterCerts.filter((r) => matchesSearch(r, query) && matchesFilters(r, statusFilter, clusterFilter)),
+    [clusterCerts, query, statusFilter, clusterFilter],
   );
 
-  const summary = useMemo(() => summarizeStatuses(certs), [certs]);
+  const summary = useMemo(() => summarizeStatuses(clusterCerts), [clusterCerts]);
 
   if (selectedCertId) {
     const selectedRow = certs.find((r) => r.id === selectedCertId);
@@ -83,8 +84,8 @@ export default function CertificatesPage({ certs, isLive, reloadCerts, initialCe
   return (
     <div>
       <PageHeading
-        title="Certificates"
-        description="Live TLS certificate health across clusters and endpoints"
+        title="Clusters"
+        description="Certificate health for every cert-manager Certificate, raw Secret, Ingress, and Gateway API route across your clusters"
       />
 
       {!isLive && (
@@ -108,18 +109,16 @@ export default function CertificatesPage({ certs, isLive, reloadCerts, initialCe
         onExport={() => exportJson(rows)}
         isLive={isLive}
         addCluster={addCluster}
-        addEndpoint={addEndpoint}
         onSourcesChanged={refreshAfterAdd}
         visibleColumns={visibleColumns}
         onToggleColumn={toggleColumn}
       />
 
-      <Section title="Certificates">
+      <Section title="Clusters">
         <div className="-mx-4 -mt-1">
           <div className="flex flex-row flex-wrap items-center justify-between gap-2 border-y border-border px-4 py-3">
             <span className="text-xs text-muted-foreground">
-              {certs.length} certificates tracked across {clusters.length} clusters and live
-              endpoints
+              {clusterCerts.length} certificates tracked across {clusters.length} clusters
             </span>
             <div className="flex flex-wrap items-center gap-1.5">
               {summary.map(([status, count]) => (
@@ -134,7 +133,7 @@ export default function CertificatesPage({ certs, isLive, reloadCerts, initialCe
 
           <div className="-mb-4 border-t border-border px-4 py-3">
             <span className="text-xs text-muted-foreground">
-              Showing {rows.length === 0 ? 0 : 1}–{rows.length} of {certs.length}
+              Showing {rows.length === 0 ? 0 : 1}–{rows.length} of {clusterCerts.length}
             </span>
           </div>
         </div>

@@ -1,7 +1,6 @@
 import { DownloadSimpleIcon, FunnelIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { ColumnVisibilityMenu } from "@/components/CertTable";
 import AddClusterPopover from "@/components/certificates/AddClusterPopover";
-import AddEndpointPopover from "@/components/certificates/AddEndpointPopover";
 import SourcesDialog from "@/components/certificates/SourcesDialog";
 import { STATUS_LABEL } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -30,7 +29,6 @@ export default function CertificatesToolbar({
   onExport,
   isLive,
   addCluster,
-  addEndpoint,
   onSourcesChanged,
   visibleColumns,
   onToggleColumn,
@@ -45,7 +43,7 @@ export default function CertificatesToolbar({
           className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted-foreground"
         />
         <Input
-          placeholder="Search certificates"
+          placeholder="Search clusters"
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
           className="pl-8"
@@ -109,9 +107,8 @@ export default function CertificatesToolbar({
       </Button>
 
       <div className="ml-auto flex items-center gap-2">
-        <SourcesDialog isLive={isLive} onChanged={onSourcesChanged} />
+        <SourcesDialog isLive={isLive} onChanged={onSourcesChanged} scope="clusters" />
         <AddClusterPopover isLive={isLive} addCluster={addCluster} />
-        <AddEndpointPopover isLive={isLive} addEndpoint={addEndpoint} />
         <ColumnVisibilityMenu visible={visibleColumns} onToggle={onToggleColumn} />
       </div>
     </div>
