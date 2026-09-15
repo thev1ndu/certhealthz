@@ -24,6 +24,29 @@ CertHealthz scans all three sources — cert-manager `Certificate` objects, raw
 `kubernetes.io/tls` Secrets, and live TLS endpoints — and reports them in one
 sorted-by-urgency table.
 
+## Comparison
+
+| | CertHealthz | cert-manager (bare) | Datadog Cert Monitoring | Prometheus `blackbox_exporter` | `testssl.sh` | SSL Labs / Qualys | UptimeRobot / Better Uptime | Venafi / DigiCert CertCentral |
+|---|---|---|---|---|---|---|---|---|
+| `Certificate` vs actual `Secret` drift detection | Yes | No — trusts its own status | No | No | No | No | No | Yes, via k8s connector add-on |
+| Ingress + Gateway API + Istio/Traefik cross-reference | Yes | No | No | No | No | No | No | Partial, vendor-dependent |
+| Ingress→Gateway migration coverage + cutover gate | Yes | No | No | No | No | No | No | No |
+| Cloud cert scanning (AWS ACM / GCP / Azure Key Vault) | Yes, opt-in | No | No, separate integrations | No | No | No | No | Yes, enterprise CAs |
+| mTLS client-certificate tracking | Yes | No | No | No | No, checks presented cert only | No | No | Yes |
+| Certificate Transparency log monitoring | Yes | No | No | No | No | No | No | Yes |
+| Live TLS endpoint probing | Yes | No | Yes | Yes | Yes, deep audit | Yes, external only | Yes, basic | Yes |
+| Multi-cluster | Yes, `--kubeconfig` repeat | No, per-cluster only | Yes, via agents | Yes, multiple scrape targets | No, one host at a time | N/A | N/A | Yes |
+| Historical trend/diff | Yes, SQLite | No | Yes, hosted | DIY via Grafana | No, point-in-time | No | Limited | Yes |
+| Self-hosted, single binary, no CRD | Yes | Yes, but is the thing being monitored | No, SaaS agent | Yes, OSS | Yes, script | No, hosted | No, SaaS | No, SaaS/appliance |
+| Cost | Free, OSS | Free, OSS | Paid, per-host/synthetic | Free, OSS (build the rest yourself) | Free, OSS | Free (rate-limited) / paid API | Freemium | Enterprise, $$$$ |
+
+CertHealthz's niche: the only one here that does Certificate-vs-Secret drift
+detection *and* Ingress-to-Gateway migration coverage *and* unifies
+cert-manager + raw Secrets + Ingress/Gateway/mesh + cloud + live endpoints +
+CT logs in one free, single-binary report. It doesn't compete with Venafi-class
+tools on enterprise compliance/audit trail, or with Datadog/UptimeRobot on
+managed SaaS convenience — those are different trade-offs, not gaps to close.
+
 ## Install
 
 ```sh
@@ -253,38 +276,16 @@ MVP.
       scan, tagged `mtls-client` with a "client certificate" note, so client certs are tracked
       without being mistaken for server certs backing a route.
 
-### Planned
-
-**Trust & chain validation**
-
-- [ ] OCSP/CRL revocation status check
-- [ ] issuer-change anomaly detection (cert for a domain suddenly issued by an unexpected CA)
-
-**Root cause & remediation**
-
-- [ ] admission webhook: warn or block on an Ingress/Gateway referencing an already-expiring cert
-
-**Alerting & workflow**
-
-- [ ] native Slack Block Kit / Teams adaptive-card formatting, not raw JSON in `text`
-- [ ] PagerDuty, Opsgenie, and email alert channels alongside webhook
-- [ ] alert de-dup and escalation (re-notify as expiry gets closer, don't just fire once)
-- [ ] per-namespace/per-team warn thresholds and alert routing
-
-**Operating at scale**
-
-- [ ] in-cluster mode: run as a Deployment/CronJob under a ServiceAccount, no kubeconfig needed
-- [ ] Helm chart for in-cluster install
-- [ ] CRD/operator (`CertHealthzPolicy`) for GitOps-managed thresholds and alert routing
-- [ ] dashboard auth (OIDC/SSO) — currently unauthenticated
-- [ ] trend charts in the dashboard, backed by the existing SQLite history
-- [ ] compliance export (CSV/PDF) — auditable evidence of cert hygiene for SOC2/PCI reviews
+Full feature roadmap (trust/chain validation, alerting, detection coverage, policy enforcement,
+ecosystem integrations, scaling, and enterprise readiness) has moved to
+[PLANNED.md](PLANNED.md).
 
 ### Growth
 
 - [ ] demo GIF/video of the dashboard at the top of the README
 - [ ] zero-setup demo (`docker run` or hosted playground with fake data, no kubeconfig needed)
-- [ ] comparison table vs cert-manager, Datadog cert monitoring, `testssl.sh`
+- [x] comparison table vs cert-manager, Datadog cert monitoring, `testssl.sh`, and others — see
+      [Comparison](#comparison) above
 - [ ] Homebrew tap
 - [ ] `krew` plugin (kubectl plugin index)
 - [ ] submit to `awesome-kubernetes`, `awesome-go`, CNCF landscape
