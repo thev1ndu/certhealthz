@@ -275,6 +275,19 @@ MVP.
       scans matching `kubernetes.io/tls` Secrets through the same parsing path as a normal Secret
       scan, tagged `mtls-client` with a "client certificate" note, so client certs are tracked
       without being mistaken for server certs backing a route.
+- [x] on-demand synthetic route test: a **Test** button on any Routes-tab row (and on a Migration
+      coverage row, to re-verify a `cutoverReady` claim) runs a live TCP connect → TLS handshake
+      (SNI forced to the route's own host) → certificate comparison against the scan's own backing
+      Secret → HTTP request, reporting each step's own pass/fail and latency (`POST
+      /api/routes/test`) — generalizes the migration cutover-gate's live-TLS-probe into a full
+      HTTP-layer check, and catches "Gateway/Ingress is Accepted and healthy but is actually
+      serving the wrong certificate," a gap drift detection alone can't see since it never opens a
+      real connection. Only ever dials an address the scanner already discovered — a published
+      LB/Gateway address, or, for a ClusterIP-only route with no external address (e.g. a
+      bare-metal cluster with no LoadBalancer support), a port-forward straight to the fronting
+      controller's Service, supported for Envoy Gateway and ingress-nginx specifically; every other
+      controller reports an explicit "unsupported controller for port-forward testing" result
+      rather than guessing at one — never an arbitrary user-supplied URL.
 
 Full feature roadmap (trust/chain validation, alerting, detection coverage, policy enforcement,
 ecosystem integrations, scaling, and enterprise readiness) has moved to

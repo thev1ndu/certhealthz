@@ -20,6 +20,12 @@ type Route struct {
 	Ingress    string
 	SecretName string
 	Hosts      []string
+	// LoadBalancerAddresses is this Ingress's status.loadBalancer.ingress
+	// entries (both .ip and .hostname, where present) — the address(es) an
+	// operator would actually dial to reach this route, used by the
+	// synthetic route test (see pkg/probe.TestRoute) to pick a direct
+	// dial target before falling back to a port-forward.
+	LoadBalancerAddresses []string
 }
 
 // Scan lists every Ingress's TLS blocks across all namespaces. Ingress with
@@ -33,16 +39,26 @@ func Scan(ctx context.Context, cluster string, client kubernetes.Interface) ([]R
 
 	var routes []Route
 	for _, ing := range list.Items {
+		var lbAddrs []string
+		for _, lb := range ing.Status.LoadBalancer.Ingress {
+			if lb.IP != "" {
+				lbAddrs = append(lbAddrs, lb.IP)
+			}
+			if lb.Hostname != "" {
+				lbAddrs = append(lbAddrs, lb.Hostname)
+			}
+		}
 		for _, tls := range ing.Spec.TLS {
 			if tls.SecretName == "" {
 				continue
 			}
 			routes = append(routes, Route{
-				Cluster:    cluster,
-				Namespace:  ing.Namespace,
-				Ingress:    ing.Name,
-				SecretName: tls.SecretName,
-				Hosts:      tls.Hosts,
+				Cluster:               cluster,
+				Namespace:             ing.Namespace,
+				Ingress:               ing.Name,
+				SecretName:            tls.SecretName,
+				Hosts:                 tls.Hosts,
+				LoadBalancerAddresses: lbAddrs,
 			})
 		}
 	}

@@ -26,13 +26,21 @@ func NewDynamicClient(kubeconfigPath string) (dynamic.Interface, error) {
 }
 
 // NewTypedClient builds a standard client-go clientset, used for scanning
-// raw kubernetes.io/tls Secrets (cert-manager's own API doesn't expose those).
-func NewTypedClient(kubeconfigPath string) (kubernetes.Interface, error) {
+// raw kubernetes.io/tls Secrets (cert-manager's own API doesn't expose
+// those). It also returns the underlying *rest.Config, needed by callers
+// that go on to build a port-forward (see pkg/portforward) — client-go's
+// SPDY executor needs the raw REST config, not just the clientset built
+// from it.
+func NewTypedClient(kubeconfigPath string) (kubernetes.Interface, *rest.Config, error) {
 	cfg, err := restConfig(kubeconfigPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return kubernetes.NewForConfig(cfg)
+	client, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	return client, cfg, nil
 }
 
 // NewGatewayClient builds a Gateway API generated clientset from a
@@ -80,13 +88,18 @@ func NewDynamicClientFromBytes(kubeconfig []byte) (dynamic.Interface, error) {
 }
 
 // NewTypedClientFromBytes is the in-memory-kubeconfig counterpart to
-// NewTypedClient.
-func NewTypedClientFromBytes(kubeconfig []byte) (kubernetes.Interface, error) {
+// NewTypedClient, also returning the underlying *rest.Config for the same
+// reason.
+func NewTypedClientFromBytes(kubeconfig []byte) (kubernetes.Interface, *rest.Config, error) {
 	cfg, err := restConfigFromBytes(kubeconfig)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return kubernetes.NewForConfig(cfg)
+	client, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	return client, cfg, nil
 }
 
 func restConfigFromBytes(kubeconfig []byte) (*rest.Config, error) {

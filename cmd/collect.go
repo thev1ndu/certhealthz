@@ -16,6 +16,7 @@ import (
 	"github.com/thev1ndu/certhealthz/pkg/probe"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 
 	gatewayclientset "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned"
 )
@@ -43,6 +44,12 @@ type ClusterClients struct {
 	Dyn     dynamic.Interface
 	Typed   kubernetes.Interface
 	Gateway gatewayclientset.Interface
+	// Rest is the *rest.Config the typed client was built from. Only
+	// populated when includeSecrets is true (the same condition that
+	// populates Typed/Gateway) — it's needed by the port-forward fallback
+	// (see pkg/portforward) for client-go's SPDY executor, which needs the
+	// raw REST config rather than a clientset built from it.
+	Rest *rest.Config
 }
 
 // buildClusterClients builds the dynamic (and, if requested, typed) client
@@ -78,15 +85,17 @@ func buildClusterClients(label string, kubeconfig []byte, path string, includeSe
 
 	if includeSecrets {
 		var typedClient kubernetes.Interface
+		var restCfg *rest.Config
 		if kubeconfig != nil {
-			typedClient, err = certmanager.NewTypedClientFromBytes(kubeconfig)
+			typedClient, restCfg, err = certmanager.NewTypedClientFromBytes(kubeconfig)
 		} else {
-			typedClient, err = certmanager.NewTypedClient(path)
+			typedClient, restCfg, err = certmanager.NewTypedClient(path)
 		}
 		if err != nil {
 			return ClusterClients{}, fmt.Errorf("building typed client for %s: %w", label, err)
 		}
 		cc.Typed = typedClient
+		cc.Rest = restCfg
 
 		var gwClient gatewayclientset.Interface
 		if kubeconfig != nil {

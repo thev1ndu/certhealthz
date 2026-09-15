@@ -89,3 +89,18 @@ export function getRoutes() {
 export function getRouteCoverage() {
   return request("/api/routes/coverage");
 }
+
+// testRoute triggers a synthetic on-demand connectivity check (TCP/TLS/
+// cert-match/HTTP) against an already-scanned route. `route` is echoed
+// straight from a route row's own identity fields (cluster, namespace,
+// kind, name) — see cmd/routes.go's handleTestRoute, which only ever dials
+// an address it re-derives from data the scanner already discovered, never
+// anything supplied directly by the client.
+export function testRoute(route) {
+  return postJSON("/api/routes/test", {
+    cluster: route.cluster,
+    namespace: route.namespace,
+    kind: route.kind,
+    name: route.name,
+  });
+}

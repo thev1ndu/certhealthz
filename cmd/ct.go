@@ -51,7 +51,7 @@ func init() {
 func knownDNSNames(ctx context.Context) []string {
 	var names []string
 	for _, kc := range kubeconfigPaths {
-		client, err := certmanager.NewTypedClient(kc)
+		client, _, err := certmanager.NewTypedClient(kc)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: building client for %s: %v\n", kc, err)
 			continue

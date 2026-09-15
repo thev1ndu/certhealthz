@@ -6,6 +6,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import RouteTestDialog from "@/components/routes/RouteTestDialog";
 
 const KIND_LABEL = {
   ingress: "Ingress",
@@ -31,6 +32,7 @@ export default function RoutesTable({ routes }) {
           <TableHead>Secret</TableHead>
           <TableHead>Hosts</TableHead>
           <TableHead>Accepted</TableHead>
+          <TableHead className="text-right">Test</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -51,6 +53,12 @@ export default function RoutesTable({ routes }) {
             </TableCell>
             <TableCell className={r.accepted ? "text-status-ok" : "text-status-error"}>
               {r.accepted ? "Yes" : "No"}
+            </TableCell>
+            <TableCell className="text-right">
+              <RouteTestDialog
+                route={r}
+                label={`${KIND_LABEL[r.kind] ?? r.kind} ${r.namespace}/${r.name}`}
+              />
             </TableCell>
           </TableRow>
         ))}

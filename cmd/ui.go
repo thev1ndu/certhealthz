@@ -948,8 +948,8 @@ type UIDeps struct {
 // the /api/certs, /api/certs/detail, /api/certs/reissue, /api/clusters (+ DELETE
 // /api/clusters/{label}), /api/endpoints (+ DELETE /api/endpoints/{endpoint}),
 // /api/settings, /api/alert, /api/history/record, /api/history/diff,
-// /api/history/events, /api/ct, /api/routes, and /api/routes/coverage
-// endpoints.
+// /api/history/events, /api/ct, /api/routes, /api/routes/coverage, and
+// /api/routes/test endpoints.
 func NewUIMux(uiHandler http.Handler, deps UIDeps) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/certs", func(w http.ResponseWriter, r *http.Request) {
@@ -1044,6 +1044,9 @@ func NewUIMux(uiHandler http.Handler, deps UIDeps) *http.ServeMux {
 	})
 	mux.HandleFunc("/api/routes/coverage", func(w http.ResponseWriter, r *http.Request) {
 		handleRouteCoverage(deps.Clusters, uiProbeTimeout, w, r)
+	})
+	mux.HandleFunc("/api/routes/test", func(w http.ResponseWriter, r *http.Request) {
+		handleTestRoute(deps, w, r)
 	})
 	mux.Handle("/", uiHandler)
 	return mux

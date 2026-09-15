@@ -20,7 +20,7 @@ export default function RoutesPage() {
       ) : (
         <div className="flex flex-col gap-6">
           <Section title="Migration coverage">
-            <CoverageTable coverage={coverage} />
+            <CoverageTable coverage={coverage} routes={routes} />
           </Section>
           <Section title="Routes">
             <RoutesTable routes={routes} />
