@@ -2,6 +2,7 @@ package cloudcert
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	certificatemanager "cloud.google.com/go/certificatemanager/apiv1"
@@ -33,7 +34,7 @@ func (a gcpClientAdapter) ListCertificates(ctx context.Context, parent string) (
 	var certs []*certificatemanagerpb.Certificate
 	for {
 		cert, err := it.Next()
-		if err == iterator.Done {
+		if errors.Is(err, iterator.Done) {
 			break
 		}
 		if err != nil {

@@ -27,12 +27,6 @@ var istioGatewayGVR = schema.GroupVersionResource{
 	Resource: "gateways",
 }
 
-var istioVirtualServiceGVR = schema.GroupVersionResource{
-	Group:    "networking.istio.io",
-	Version:  "v1beta1",
-	Resource: "virtualservices",
-}
-
 // IstioRoute is one Istio Gateway server's resolved TLS binding: the hosts
 // it terminates TLS for and the Secret (credentialName) it uses.
 type IstioRoute struct {

@@ -29,7 +29,7 @@ var traefikIngressRouteGVR = schema.GroupVersionResource{
 // backtick-quoted string following any Host-like matcher, which covers the
 // overwhelming majority of real-world rules without implementing a full
 // matcher-language parser.
-var hostRuleRe = regexp.MustCompile("Host(?:SNI)?\\(([^)]*)\\)")
+var hostRuleRe = regexp.MustCompile(`Host(?:SNI)?\(([^)]*)\)`)
 var backtickArgRe = regexp.MustCompile("`([^`]*)`")
 
 // TraefikRoute is one Traefik IngressRoute's resolved TLS binding.
