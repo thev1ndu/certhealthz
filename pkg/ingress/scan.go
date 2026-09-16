@@ -1,6 +1,8 @@
-// Package ingress scans Ingress resources for their TLS blocks, so callers
-// can cross-check what a route claims to serve against what its backing
-// Secret's certificate actually covers.
+// Package ingress scans Ingress resources — both their TLS blocks (so
+// callers can cross-check what a route claims to serve against what its
+// backing Secret's certificate actually covers) and their plain HTTP rule
+// hosts, so a route shows up in the Routes list even before it terminates
+// TLS.
 package ingress
 
 import (
@@ -12,13 +14,13 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// Route is one Ingress TLS block: the Secret it references and the hosts
-// it's terminating TLS for.
+// Route is one group of hosts an Ingress serves under a single Secret — or,
+// for hosts with no TLS block at all, under no Secret (SecretName empty).
 type Route struct {
 	Cluster    string
 	Namespace  string
 	Ingress    string
-	SecretName string
+	SecretName string // empty if these Hosts have no TLS block
 	Hosts      []string
 	// LoadBalancerAddresses is this Ingress's status.loadBalancer.ingress
 	// entries (both .ip and .hostname, where present) — the address(es) an
@@ -28,9 +30,11 @@ type Route struct {
 	LoadBalancerAddresses []string
 }
 
-// Scan lists every Ingress's TLS blocks across all namespaces. Ingress with
-// no TLS block, or a TLS block with no secretName, is skipped — there's no
-// Secret to cross-check.
+// Scan lists every Ingress's routed hosts across all namespaces: one Route
+// per TLS block (SecretName set, skipping any TLS block with no
+// secretName), plus one further Route per Ingress collecting any
+// spec.rules[].host not already covered by a TLS block (SecretName empty) —
+// so a plain HTTP Ingress still appears in the Routes list.
 func Scan(ctx context.Context, cluster string, client kubernetes.Interface) ([]Route, error) {
 	list, err := client.NetworkingV1().Ingresses("").List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -48,6 +52,8 @@ func Scan(ctx context.Context, cluster string, client kubernetes.Interface) ([]R
 				lbAddrs = append(lbAddrs, lb.Hostname)
 			}
 		}
+
+		covered := make(map[string]bool)
 		for _, tls := range ing.Spec.TLS {
 			if tls.SecretName == "" {
 				continue
@@ -58,6 +64,27 @@ func Scan(ctx context.Context, cluster string, client kubernetes.Interface) ([]R
 				Ingress:               ing.Name,
 				SecretName:            tls.SecretName,
 				Hosts:                 tls.Hosts,
+				LoadBalancerAddresses: lbAddrs,
+			})
+			for _, h := range tls.Hosts {
+				covered[h] = true
+			}
+		}
+
+		var httpHosts []string
+		for _, rule := range ing.Spec.Rules {
+			if rule.Host == "" || covered[rule.Host] {
+				continue
+			}
+			covered[rule.Host] = true
+			httpHosts = append(httpHosts, rule.Host)
+		}
+		if len(httpHosts) > 0 {
+			routes = append(routes, Route{
+				Cluster:               cluster,
+				Namespace:             ing.Namespace,
+				Ingress:               ing.Name,
+				Hosts:                 httpHosts,
 				LoadBalancerAddresses: lbAddrs,
 			})
 		}

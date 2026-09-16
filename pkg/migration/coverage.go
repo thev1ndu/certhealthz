@@ -33,7 +33,7 @@ type HostCoverage struct {
 	Host  string
 	State State
 
-	IngressSecret string // "namespace/name", empty if not served by Ingress
+	IngressSecret string // "namespace/name", empty if not served by Ingress or that Ingress has no TLS block for this host
 	GatewaySecret string // "namespace/name", empty if not served by Gateway API
 	SecretDrift   bool   // true if both sides serve this host with different Secrets
 	CutoverReady  bool   // true if the Gateway side has passed its cutover gate (see cutoverGate)
@@ -50,7 +50,8 @@ type HostCoverage struct {
 // hostEntry accumulates what's known about one hostname while scanning
 // both route sources, before being folded into a HostCoverage.
 type hostEntry struct {
-	ingressSecret string
+	ingressServed bool   // true if any Ingress routes this host, TLS or not
+	ingressSecret string // set only if that Ingress terminates TLS for it
 	gatewayRoute  *gateway.Route
 }
 
@@ -104,7 +105,11 @@ func Coverage(ingressRoutes []ingress.Route, gatewayRoutes []gateway.Route, prob
 			if host == "" {
 				continue
 			}
-			entry(host).ingressSecret = route.Namespace + "/" + route.SecretName
+			e := entry(host)
+			e.ingressServed = true
+			if route.SecretName != "" {
+				e.ingressSecret = route.Namespace + "/" + route.SecretName
+			}
 		}
 	}
 
@@ -132,9 +137,9 @@ func Coverage(ingressRoutes []ingress.Route, gatewayRoutes []gateway.Route, prob
 	for host, e := range byHost {
 		hc := HostCoverage{Host: host}
 		switch {
-		case e.ingressSecret != "" && e.gatewayRoute != nil:
+		case e.ingressServed && e.gatewayRoute != nil:
 			hc.State = DualRunning
-		case e.ingressSecret != "":
+		case e.ingressServed:
 			hc.State = IngressOnly
 		default:
 			hc.State = GatewayOnly
@@ -144,7 +149,7 @@ func Coverage(ingressRoutes []ingress.Route, gatewayRoutes []gateway.Route, prob
 		if e.gatewayRoute != nil {
 			hc.GatewaySecret = e.gatewayRoute.SecretNamespace + "/" + e.gatewayRoute.SecretName
 		}
-		if hc.State == DualRunning && hc.IngressSecret != hc.GatewaySecret {
+		if hc.State == DualRunning && hc.IngressSecret != "" && hc.IngressSecret != hc.GatewaySecret {
 			hc.SecretDrift = true
 		}
 

@@ -98,7 +98,21 @@ export default function OverviewPage({ certs, isLive, onNavigate }) {
             )}
           </Section>
 
-          <Section title="Needs attention">
+          <Section
+            title="Needs attention"
+            headerRight={
+              attention.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => onNavigate("certificates")}
+                  className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  View all clusters
+                  <ArrowRightIcon size={12} />
+                </button>
+              )
+            }
+          >
             {attention.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 Every tracked certificate is healthy.
@@ -131,16 +145,6 @@ export default function OverviewPage({ certs, isLive, onNavigate }) {
                   </button>
                 ))}
               </div>
-            )}
-            {attention.length > 0 && (
-              <button
-                type="button"
-                onClick={() => onNavigate("certificates")}
-                className="mt-3 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-              >
-                View all clusters
-                <ArrowRightIcon size={12} />
-              </button>
             )}
           </Section>
 
